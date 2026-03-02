@@ -108,7 +108,7 @@ async function fetchLogin(session, email, password, urlPost, ppft) {
 
         const retText = await ret.text();
         const returnUrlMatch = retText.match(
-          /(?<="recoveryCancel":{"returnUrl":")+.+?(?=",)/
+          /(?<="recoveryCancel":\{"returnUrl":")(.+?)(?=",)/
         );
         if (returnUrlMatch) {
           const fin = await proxiedFetch(returnUrlMatch[0], {

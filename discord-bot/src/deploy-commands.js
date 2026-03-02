@@ -11,13 +11,13 @@ const commands = [
     .setName("check")
     .setDescription("Check Microsoft codes against WLID tokens")
     .addStringOption((o) =>
-      o.setName("wlids").setDescription("WLID tokens (one per line or comma-separated)").setRequired(true)
+      o.setName("wlids").setDescription("WLID tokens (comma-separated). If empty, uses stored WLIDs.").setRequired(false)
     )
     .addAttachmentOption((o) =>
       o.setName("codes_file").setDescription("Text file containing codes (one per line)").setRequired(false)
     )
     .addStringOption((o) =>
-      o.setName("codes").setDescription("Codes to check (one per line or comma-separated)").setRequired(false)
+      o.setName("codes").setDescription("Codes to check (comma-separated)").setRequired(false)
     )
     .addIntegerOption((o) =>
       o.setName("threads").setDescription("Number of concurrent threads (1-100, default 10)").setMinValue(1).setMaxValue(100)
@@ -47,6 +47,16 @@ const commands = [
     ),
 
   new SlashCommandBuilder()
+    .setName("wlidset")
+    .setDescription("Set WLID tokens for /check (owner only, replaces previous)")
+    .addAttachmentOption((o) =>
+      o.setName("wlids_file").setDescription("Text file with WLID tokens (one per line)").setRequired(false)
+    )
+    .addStringOption((o) =>
+      o.setName("wlids").setDescription("WLID tokens (comma-separated)").setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
     .setName("auth")
     .setDescription("Authorize a user to use the bot (owner only)")
     .addUserOption((o) => o.setName("user").setDescription("User to authorize").setRequired(true))
@@ -68,7 +78,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("stats")
-    .setDescription("Show bot status and active sessions"),
+    .setDescription("Show bot status, active sessions, and stored WLIDs"),
 ].map((c) => c.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);

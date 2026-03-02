@@ -1,0 +1,74 @@
+// ============================================================
+//  Register slash commands with Discord
+//  Run once:  node src/deploy-commands.js
+// ============================================================
+
+const { REST, Routes, SlashCommandBuilder } = require("discord.js");
+const { BOT_TOKEN, CLIENT_ID } = require("./config");
+
+const commands = [
+  new SlashCommandBuilder()
+    .setName("check")
+    .setDescription("Check Microsoft codes against WLID tokens")
+    .addStringOption((o) =>
+      o.setName("wlids").setDescription("WLID tokens (one per line or comma-separated)").setRequired(true)
+    )
+    .addAttachmentOption((o) =>
+      o.setName("codes_file").setDescription("Text file containing codes (one per line)").setRequired(false)
+    )
+    .addStringOption((o) =>
+      o.setName("codes").setDescription("Codes to check (one per line or comma-separated)").setRequired(false)
+    )
+    .addIntegerOption((o) =>
+      o.setName("threads").setDescription("Number of concurrent threads (1-100, default 10)").setMinValue(1).setMaxValue(100)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("claim")
+    .setDescription("Claim WLID tokens from Microsoft accounts")
+    .addAttachmentOption((o) =>
+      o.setName("accounts_file").setDescription("Text file with email:password per line").setRequired(false)
+    )
+    .addStringOption((o) =>
+      o.setName("accounts").setDescription("Accounts as email:password (comma-separated)").setRequired(false)
+    )
+    .addIntegerOption((o) =>
+      o.setName("threads").setDescription("Number of concurrent threads (1-50, default 5)").setMinValue(1).setMaxValue(50)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("auth")
+    .setDescription("Authorize a user to use the bot (owner only)")
+    .addUserOption((o) => o.setName("user").setDescription("User to authorize").setRequired(true))
+    .addStringOption((o) =>
+      o
+        .setName("duration")
+        .setDescription("Duration (e.g. 1h, 7d, 30d, 1mo, forever)")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("deauth")
+    .setDescription("Remove a user's authorization (owner only)")
+    .addUserOption((o) => o.setName("user").setDescription("User to deauthorize").setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName("authlist")
+    .setDescription("List all authorized users"),
+
+  new SlashCommandBuilder()
+    .setName("stats")
+    .setDescription("Show bot status and active sessions"),
+].map((c) => c.toJSON());
+
+const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);
+
+(async () => {
+  try {
+    console.log("Registering slash commands...");
+    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+    console.log("Slash commands registered successfully.");
+  } catch (error) {
+    console.error("Failed to register commands:", error);
+  }
+})();

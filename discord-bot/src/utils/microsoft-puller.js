@@ -1,9 +1,21 @@
 // ============================================================
 //  Xbox Code Fetcher + Validator (PrepareRedeem)
-//  Exact same logic as the Python script, ported to Node.js
+//  100% exact same logic as the Python script, ported to Node.js
 // ============================================================
 
 const crypto = require("crypto");
+
+// ── Code Format Validation (exact match to Python) ───────────
+
+const INVALID_CHARS = new Set(["A", "E", "I", "O", "U", "L", "S", "0", "1", "5"]);
+
+function isInvalidCodeFormat(code) {
+  if (!code || code.length < 5 || code.includes(" ")) return true;
+  for (const char of code) {
+    if (INVALID_CHARS.has(char)) return true;
+  }
+  return false;
+}
 
 // ── Xbox Live OAuth Login ────────────────────────────────────
 
@@ -118,7 +130,6 @@ async function fetchLogin(session, email, password, urlPost, ppft) {
 
 async function getXboxTokens(rpsToken) {
   try {
-    // Step 1: User token
     const userRes = await fetch(
       "https://user.auth.xboxlive.com/user/authenticate",
       {
@@ -139,7 +150,6 @@ async function getXboxTokens(rpsToken) {
     const userData = await userRes.json();
     const userToken = userData.Token;
 
-    // Step 2: XSTS token
     const xstsRes = await fetch(
       "https://xsts.auth.xboxlive.com/xsts/authorize",
       {
@@ -216,13 +226,14 @@ async function fetchCodesFromXbox(uhs, xstsToken) {
 }
 
 // ── Store Login + PrepareRedeem Validation ────────────────────
+// Exact same flow as Python: login.live.com/ppsecure → redirect → form submit → session
 
 async function loginMicrosoftStore(email, password) {
   const headers = {
     "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0",
     Accept:
-      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Accept-Language": "en-US,en;q=0.9",
     Referer: "https://account.microsoft.com/",
     Origin: "https://account.microsoft.com",
@@ -264,12 +275,18 @@ async function loginMicrosoftStore(email, password) {
   }
 
   try {
-    // Login via ppsecure
-    const loginUrl = `https://login.live.com/ppsecure/post.srf?username=${encodeURIComponent(email)}&client_id=81feaced-5ddd-41e7-8bef-3e20a2689bb7&contextid=833A37B454306173&opid=81A1AC2B0BEB4ABA&bk=${Math.floor(Date.now() / 1000)}&uaid=f8aac2614ca54994b0bb9621af361fe6&pid=15216&prompt=none`;
+    // Login via ppsecure — exact same as Python
+    const bk = Math.floor(Date.now() / 1000);
+    const loginUrl = `https://login.live.com/ppsecure/post.srf?username=${encodeURIComponent(email)}&client_id=81feaced-5ddd-41e7-8bef-3e20a2689bb7&contextid=833A37B454306173&opid=81A1AC2B0BEB4ABA&bk=${bk}&uaid=f8aac2614ca54994b0bb9621af361fe6&pid=15216&prompt=none`;
 
     const { text: loginText } = await storePost(
       loginUrl,
-      new URLSearchParams({ login: email, loginfmt: email, passwd: password, PPFT: "-DmNqKIwViyNLVW!ndu48B52hWo3*dmmh3IYETDXnVvQdWK!9sxjI48z4IX*vHf5Gl*FYol2kesrvhsuunUYDLekZOg8UW8V4cugeNYzI1wLpI7wHWnu9CLiqRiISqQ2jS1kLHkeekbWTFtKb2l0J7k3nmQ3u811SxsV1e4l8WfyX8Pt8!pgnQ1bNLoptSPmVE45tyzHdttjDZeiMvu6aV0NrFLHYroFsVS581ZI*C8z27!K5I8nESfTU!YxntGN1RQ$$" }).toString(),
+      new URLSearchParams({
+        login: email,
+        loginfmt: email,
+        passwd: password,
+        PPFT: "-DmNqKIwViyNLVW!ndu48B52hWo3*dmmh3IYETDXnVvQdWK!9sxjI48z4IX*vHf5Gl*FYol2kesrvhsuunUYDLekZOg8UW8V4cugeNYzI1wLpI7wHWnu9CLiqRiISqQ2jS1kLHkeekbWTFtKb2l0J7k3nmQ3u811SxsV1e4l8WfyX8Pt8!pgnQ1bNLoptSPmVE45tyzHdttjDZeiMvu6aV0NrFLHYroFsVS581ZI*C8z27!K5I8nESfTU!YxntGN1RQ$$",
+      }).toString(),
       { "Content-Type": "application/x-www-form-urlencoded" }
     );
 
@@ -296,6 +313,7 @@ async function loginMicrosoftStore(email, password) {
   }
 }
 
+// Exact same reference ID generation as Python
 function generateReferenceId() {
   const timestampVal = Math.floor(Date.now() / 30000);
   const n = timestampVal.toString(16).toUpperCase().padStart(8, "0");
@@ -313,7 +331,7 @@ function generateReferenceId() {
 
 async function getStoreAuthToken(cookieJar, headers) {
   try {
-    // Touch buynow endpoint first
+    // Touch buynow endpoint first — exact same as Python
     await fetch("https://buynowui.production.store-web.dynamics.com/akam/13/79883e11", {
       headers: { ...headers, Cookie: cookieJar },
     }).catch(() => {});
@@ -342,6 +360,7 @@ async function getStoreAuthToken(cookieJar, headers) {
   }
 }
 
+// Exact same store cart state extraction as Python
 async function getStoreCartState(token, cookieJar, headers) {
   try {
     const msCv = "xddT7qMNbECeJpTq.6.2";
@@ -392,17 +411,25 @@ async function getStoreCartState(token, cookieJar, headers) {
   }
 }
 
+// Exact same PrepareRedeem validation as Python — with all headers matched
 async function validateCodePrepareRedeem(code, token, storeState, cookieJar, userAgent) {
-  if (!code || code.length < 5) return { code, status: "INVALID", message: `${code} | INVALID` };
+  // Exact same format validation as Python
+  if (isInvalidCodeFormat(code)) {
+    return { code, status: "INVALID", message: `${code} | INVALID` };
+  }
 
+  // Exact same headers as Python script
   const hdrs = {
     host: "buynow.production.store-web.dynamics.com",
     connection: "keep-alive",
     "x-ms-tracking-id": storeState.tracking_id,
+    "sec-ch-ua-platform": '"Windows"',
     authorization: `WLID1.0=t=${token}`,
     "x-ms-client-type": "AccountMicrosoftCom",
     "x-ms-market": "US",
+    "sec-ch-ua": '"Chromium";v="142", "Microsoft Edge";v="142", "Not_A Brand";v="99"',
     "ms-cv": storeState.ms_cv,
+    "sec-ch-ua-mobile": "?0",
     "x-ms-reference-id": generateReferenceId(),
     "x-ms-vector-id": storeState.vector_id,
     "user-agent": userAgent,
@@ -424,16 +451,16 @@ async function validateCodePrepareRedeem(code, token, storeState, cookieJar, use
 
     const data = await res.json();
 
-    // Balance code
+    // Balance code — exact same as Python
     if (data.tokenType === "CSV") {
       return { code, status: "BALANCE_CODE", message: `${code} | ${data.value} ${data.currency}` };
     }
 
-    // Rate limit checks
+    // Rate limit checks — exact same as Python
     if (data.errorCode === "TooManyRequests") return { code, status: "RATE_LIMITED", message: `${code} | RATE_LIMITED` };
     if (data.error?.code === "TooManyRequests") return { code, status: "RATE_LIMITED", message: `${code} | RATE_LIMITED` };
 
-    // Cart events
+    // Cart events — exact same reason mapping as Python
     if (data.events?.cart?.[0]) {
       const cart = data.events.cart[0];
       if (cart.type === "error") {
@@ -459,7 +486,7 @@ async function validateCodePrepareRedeem(code, token, storeState, cookieJar, use
       }
     }
 
-    // Valid product
+    // Valid product — exact same logic as Python
     if (data.products?.length > 0) {
       const productInfo = data.productInfos?.[0] || {};
       const productId = productInfo.productId;
@@ -481,15 +508,10 @@ async function validateCodePrepareRedeem(code, token, storeState, cookieJar, use
 
 // ── Main Pull Pipeline ───────────────────────────────────────
 
-/**
- * Fetch codes from a single account.
- * @returns {{ email: string, codes: string[], error?: string }}
- */
 async function fetchFromAccount(email, password) {
   const session = {
     headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     },
     cookieJar: "",
   };
@@ -511,10 +533,6 @@ async function fetchFromAccount(email, password) {
   }
 }
 
-/**
- * Validate codes using PrepareRedeem via store login.
- * @returns {Array<{ code, status, message, title? }>}
- */
 async function validateCodesWithStore(email, password, codes, onProgress) {
   const storeSession = await loginMicrosoftStore(email, password);
   if (!storeSession) return codes.map((c) => ({ code: c, status: "ERROR", message: `${c} | Store login failed` }));
@@ -533,7 +551,7 @@ async function validateCodesWithStore(email, password, codes, onProgress) {
     results.push(result);
     if (onProgress) onProgress(i + 1, codes.length);
 
-    // If rate limited, stop validating with this account
+    // If rate limited, stop validating with this account — same as Python
     if (result.status === "RATE_LIMITED") {
       for (let j = i + 1; j < codes.length; j++) {
         results.push({ code: codes[j], status: "SKIPPED", message: `${codes[j]} | Skipped (rate limited)` });
@@ -546,9 +564,6 @@ async function validateCodesWithStore(email, password, codes, onProgress) {
 
 /**
  * Full pull pipeline: fetch + validate.
- * @param {string[]} accounts - email:password lines
- * @param {(phase, detail) => void} onProgress
- * @returns {{ fetchResults, validateResults }}
  */
 async function pullCodes(accounts, onProgress) {
   const parsed = accounts.map((a) => {
@@ -582,7 +597,6 @@ async function pullCodes(accounts, onProgress) {
     }
   }
 
-  // Reset counter for proper worker pool
   fetchDone = 0;
   const fetchWorkers = Array(Math.min(threads, parsed.length)).fill(null).map(() => fetchWorker());
   await Promise.all(fetchWorkers);
@@ -594,14 +608,12 @@ async function pullCodes(accounts, onProgress) {
   // Phase 2: Validate using first working account
   if (onProgress) onProgress("validate_start", { total: allCodes.length });
 
-  // Try each account for validation until one works
   let validateResults = null;
   for (const { email, password } of parsed) {
     const results = await validateCodesWithStore(email, password, allCodes, (done, total) => {
       if (onProgress) onProgress("validate", { done, total });
     });
 
-    // Check if login actually worked (not all ERROR)
     const allError = results.every((r) => r.status === "ERROR");
     if (!allError) {
       validateResults = results;

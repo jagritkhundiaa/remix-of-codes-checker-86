@@ -10,6 +10,7 @@ const { ConcurrencyLimiter } = require("./utils/concurrency");
 const { checkCodes } = require("./utils/microsoft-checker");
 const { claimWlids } = require("./utils/microsoft-claimer");
 const { pullCodes } = require("./utils/microsoft-puller");
+const { setWlids, getWlids, getWlidCount } = require("./utils/wlid-store");
 const {
   progressEmbed,
   checkResultsEmbed,
@@ -66,6 +67,23 @@ async function updateProgress(msg, embed) {
   } catch { /* ignore rate limits */ }
 }
 
+// ── WLID Set handler ────────────────────────────────────────
+
+async function handleWlidSet(respond, userId, wlidsRaw, wlidsFile) {
+  if (!isOwner(userId)) return respond({ embeds: [errorEmbed("Only the bot owner can set WLIDs.")] });
+
+  let wlids = splitInput(wlidsRaw);
+  if (wlidsFile) {
+    const lines = await fetchAttachmentLines(wlidsFile);
+    wlids = wlids.concat(lines);
+  }
+
+  if (wlids.length === 0) return respond({ embeds: [errorEmbed("No WLID tokens provided. Paste them or attach a `.txt` file.")] });
+
+  setWlids(wlids);
+  return respond({ embeds: [successEmbed(`WLID tokens updated. **${wlids.length}** tokens stored.\n\nPrevious tokens have been replaced.`)] });
+}
+
 // ── Check handler ────────────────────────────────────────────
 
 async function handleCheck(respond, userId, wlidsRaw, codesRaw, codesFile, threads = 10) {
@@ -80,15 +98,20 @@ async function handleCheck(respond, userId, wlidsRaw, codesRaw, codesFile, threa
   }
 
   try {
-    const wlids = splitInput(wlidsRaw);
+    // Use provided WLIDs or fall back to stored WLIDs
+    let wlids = splitInput(wlidsRaw);
+    if (wlids.length === 0) {
+      wlids = getWlids();
+    }
+    
     let codes = splitInput(codesRaw);
     if (codesFile) codes = codes.concat(await fetchAttachmentLines(codesFile));
 
-    if (wlids.length === 0) return respond({ embeds: [errorEmbed("No WLID tokens provided.")] });
+    if (wlids.length === 0) return respond({ embeds: [errorEmbed("No WLID tokens provided and none stored.\nUse `/wlidset` or `.wlidset` to set WLIDs first, or provide them directly.")] });
     if (codes.length === 0) return respond({ embeds: [errorEmbed("No codes provided. Use the `codes` option or attach a `.txt` file.")] });
 
     const msg = await respond({
-      embeds: [progressEmbed(0, codes.length, "Checking codes")],
+      embeds: [progressEmbed(0, codes.length, `Checking codes (${wlids.length} WLIDs)`)],
       fetchReply: true,
     });
 
@@ -306,6 +329,7 @@ async function handleAuthList(respond) {
 async function handleStats(respond) {
   const activeCount = limiter.getActiveCount();
   const authCount = auth.getAllAuthorized().length;
+  const wlidCount = getWlidCount();
   return respond({
     embeds: [
       infoEmbed(
@@ -313,6 +337,7 @@ async function handleStats(respond) {
         [
           `Active sessions: \`${activeCount}/${config.MAX_CONCURRENT_USERS}\``,
           `Authorized users: \`${authCount}\``,
+          `Stored WLIDs: \`${wlidCount}\``,
           `Uptime: \`${formatUptime(process.uptime())}\``,
           `Ping: \`${client.ws.ping}ms\``,
         ].join("\n")
@@ -366,6 +391,12 @@ client.on("interactionCreate", async (interaction) => {
       await handlePull(respond, user.id, accounts, accountsFile);
     }
 
+    else if (commandName === "wlidset") {
+      const wlids = interaction.options.getString("wlids");
+      const wlidsFile = interaction.options.getAttachment("wlids_file");
+      await handleWlidSet(respond, user.id, wlids, wlidsFile);
+    }
+
     else if (commandName === "auth") {
       const target = interaction.options.getUser("user");
       const duration = interaction.options.getString("duration");
@@ -404,10 +435,15 @@ client.on("messageCreate", async (message) => {
 
   try {
     if (cmd === "check") {
+      // .check — uses stored WLIDs if no WLIDs provided inline
+      // attach codes.txt for codes
       const wlidsRaw = args.join(" ");
       const attachment = message.attachments.first();
+      // If no args and no attachment, show usage
       if (!wlidsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.check <wlid_tokens>`\nAttach a `.txt` file with codes, or provide codes comma-separated.\n\nExample:\n`.check WLID_TOKEN_HERE`\nThen attach codes.txt")] });
+        const storedCount = getWlidCount();
+        const storedInfo = storedCount > 0 ? `\n\n**${storedCount} WLIDs stored** — just attach codes.txt to use them.` : "\n\nNo WLIDs stored. Use `.wlidset` first or provide WLIDs inline.";
+        return respond({ embeds: [infoEmbed("Usage", "`.check [wlid_tokens]` + attach codes.txt\n\nIf WLIDs are stored via `.wlidset`, just attach codes.\nOr provide WLIDs directly." + storedInfo)] });
       }
       await handleCheck(respond, message.author.id, wlidsRaw, null, attachment, 10);
     }
@@ -428,6 +464,16 @@ client.on("messageCreate", async (message) => {
         return respond({ embeds: [infoEmbed("Usage", "`.pull <accounts>`\nProvide email:password comma-separated or attach a `.txt` file.\n\nFetches codes from Game Pass accounts and validates them.\n\nExample:\n`.pull email@test.com:pass123`")] });
       }
       await handlePull(respond, message.author.id, accountsRaw, attachment);
+    }
+
+    else if (cmd === "wlidset") {
+      const wlidsRaw = args.join(" ");
+      const attachment = message.attachments.first();
+      if (!wlidsRaw && !attachment) {
+        const storedCount = getWlidCount();
+        return respond({ embeds: [infoEmbed("Usage", `\`.wlidset <wlid_tokens>\` or attach a .txt file\n\nReplaces all previously stored WLIDs.\n\nCurrently stored: **${storedCount}** WLIDs`)] });
+      }
+      await handleWlidSet(respond, message.author.id, wlidsRaw, attachment);
     }
 
     else if (cmd === "auth") {
@@ -462,22 +508,26 @@ client.on("messageCreate", async (message) => {
             "Commands",
             [
               "**Checker**",
-              "`/check` or `.check <wlids>` + attach codes.txt",
+              "`.check [wlids]` + attach codes.txt",
+              "Uses stored WLIDs if none provided",
+              "",
+              "**WLID Management (Owner)**",
+              "`.wlidset <tokens>` or attach .txt — replaces stored WLIDs",
               "",
               "**Claimer**",
-              "`/claim` or `.claim <accounts>` + attach accounts.txt",
+              "`.claim <accounts>` + attach accounts.txt",
               "",
               "**Puller**",
-              "`/pull` or `.pull <accounts>` + attach accounts.txt",
+              "`.pull <accounts>` + attach accounts.txt",
               "Fetches codes from Game Pass + validates them",
               "",
-              "**Authorization (Owner only)**",
+              "**Authorization (Owner)**",
               "`.auth <@user> <duration>` — Authorize a user",
               "`.deauth <@user>` — Remove authorization",
               "`.authlist` — List authorized users",
               "",
               "**Info**",
-              "`.stats` — Bot status",
+              "`.stats` — Bot status + stored WLID count",
               "`.help` — This message",
             ].join("\n")
           ),
@@ -496,6 +546,7 @@ client.once("ready", () => {
   console.log(`Bot online as ${client.user.tag}`);
   console.log(`Owner: ${config.OWNER_ID}`);
   console.log(`Max concurrent users: ${config.MAX_CONCURRENT_USERS}`);
+  console.log(`Stored WLIDs: ${getWlidCount()}`);
   client.user.setPresence({
     status: "online",
     activities: [{ name: "Code Checker", type: 3 }],

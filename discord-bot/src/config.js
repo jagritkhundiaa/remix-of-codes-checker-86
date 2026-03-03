@@ -26,14 +26,14 @@ module.exports = {
   // Set to false for direct connections
   USE_PROXIES: false,
 
-  // Embed color palette  (hex → decimal)
+  // Embed color palette — monochrome
   COLORS: {
-    PRIMARY:  0x2563eb,   // blue-600
-    SUCCESS:  0x16a34a,   // green-600
-    ERROR:    0xdc2626,   // red-600
-    WARNING:  0xf59e0b,   // amber-500
-    EXPIRED:  0x9333ea,   // purple-600
-    INFO:     0x0ea5e9,   // sky-500
-    MUTED:    0x64748b,   // slate-500
+    PRIMARY:  0xffffff,   // white
+    SUCCESS:  0xd4d4d4,   // neutral-300
+    ERROR:    0x737373,   // neutral-500
+    WARNING:  0xa3a3a3,   // neutral-400
+    EXPIRED:  0x525252,   // neutral-600
+    INFO:     0xe5e5e5,   // neutral-200
+    MUTED:    0x404040,   // neutral-700
   },
 };

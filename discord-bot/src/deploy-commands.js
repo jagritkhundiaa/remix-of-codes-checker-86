@@ -79,6 +79,10 @@ const commands = [
   new SlashCommandBuilder()
     .setName("stats")
     .setDescription("Show bot status, active sessions, and stored WLIDs"),
+
+  new SlashCommandBuilder()
+    .setName("help")
+    .setDescription("Show all available commands"),
 ].map((c) => c.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);

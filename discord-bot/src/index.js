@@ -22,6 +22,7 @@ const {
   successEmbed,
   infoEmbed,
   authListEmbed,
+  helpEmbed,
   textAttachment,
 } = require("./utils/embeds");
 
@@ -403,6 +404,10 @@ client.on("interactionCreate", async (interaction) => {
     else if (commandName === "stats") {
       await handleStats(respond);
     }
+
+    else if (commandName === "help") {
+      await respond({ embeds: [helpEmbed("/")] });
+    }
   } catch (err) {
     console.error(`Slash command error [${commandName}]:`, err);
     try { await respond({ embeds: [errorEmbed(err.message)] }); } catch {}
@@ -490,37 +495,7 @@ client.on("messageCreate", async (message) => {
     }
 
     else if (cmd === "help") {
-      return respond({
-        embeds: [
-          infoEmbed(
-            "Commands",
-            [
-              "**Checker**",
-              "`.check [wlids]` + attach codes.txt",
-              "Uses stored WLIDs if none provided",
-              "",
-              "**WLID Management (Owner)**",
-              "`.wlidset <tokens>` or attach .txt — replaces stored WLIDs",
-              "",
-              "**Claimer**",
-              "`.claim <accounts>` + attach accounts.txt",
-              "",
-              "**Puller**",
-              "`.pull <accounts>` + attach accounts.txt",
-              "Fetches codes from Game Pass + validates them",
-              "",
-              "**Authorization (Owner)**",
-              "`.auth <@user> <duration>` — Authorize a user",
-              "`.deauth <@user>` — Remove authorization",
-              "`.authlist` — List authorized users",
-              "",
-              "**Info**",
-              "`.stats` — Bot status + stored WLID count",
-              "`.help` — This message",
-            ].join("\n")
-          ),
-        ],
-      });
+      return respond({ embeds: [helpEmbed(config.PREFIX)] });
     }
   } catch (err) {
     console.error(`Prefix command error [${cmd}]:`, err);
@@ -542,7 +517,7 @@ client.once("ready", () => {
   
   client.user.setPresence({
     status: "online",
-    activities: [{ name: "Code Checker", type: 3 }],
+    activities: [{ name: "AutizMens v2.0", type: 3 }],
   });
 });
 

@@ -1,13 +1,16 @@
 // ============================================================
-//  Embed builders — clean, professional, no emojis
+//  Embed builders — monochrome, clean, no emojis
 // ============================================================
 
 const { EmbedBuilder, AttachmentBuilder } = require("discord.js");
 const { COLORS } = require("../config");
 
+const FOOTER_TEXT = "AutizMens | TalkNeon";
+
 function header() {
   return new EmbedBuilder()
-    .setAuthor({ name: "MS Code Checker" })
+    .setAuthor({ name: "AutizMens" })
+    .setFooter({ text: FOOTER_TEXT })
     .setTimestamp();
 }
 
@@ -29,7 +32,7 @@ function checkResultsEmbed(results) {
   const expired = results.filter((r) => r.status === "expired");
   const invalid = results.filter((r) => r.status === "invalid" || r.status === "error");
 
-  const embed = header()
+  return header()
     .setColor(COLORS.PRIMARY)
     .setTitle("Check Results")
     .addFields(
@@ -39,8 +42,6 @@ function checkResultsEmbed(results) {
       { name: "Invalid", value: `\`${invalid.length}\``, inline: true },
       { name: "Total", value: `\`${results.length}\``, inline: true }
     );
-
-  return embed;
 }
 
 function claimResultsEmbed(results) {
@@ -66,8 +67,8 @@ function pullFetchProgressEmbed(details) {
   const lines = [`\`${bar}\` ${pct}%`, `${details.done} / ${details.total} accounts`];
   if (details.lastAccount) {
     const status = details.lastError
-      ? `${details.lastAccount} - Failed`
-      : `${details.lastAccount} - ${details.lastCodes} codes`;
+      ? `${details.lastAccount} — Failed`
+      : `${details.lastAccount} — ${details.lastCodes} codes`;
     lines.push(`\nLatest: \`${status}\``);
   }
   if (details.totalCodes !== undefined) {
@@ -85,29 +86,26 @@ function pullResultsEmbed(fetchResults, validateResults) {
   const accountsSuccess = fetchResults.filter((r) => r.codes.length > 0).length;
   const accountsFailed = fetchResults.filter((r) => r.error).length;
 
-  // Checker returns lowercase statuses: valid, used, expired, invalid, error
   const valid = validateResults.filter((r) => r.status === "valid");
   const used = validateResults.filter((r) => r.status === "used");
   const expired = validateResults.filter((r) => r.status === "expired");
   const invalid = validateResults.filter((r) => r.status === "invalid");
   const errors = validateResults.filter((r) => r.status === "error");
 
-  const embed = header()
+  return header()
     .setColor(COLORS.PRIMARY)
     .setTitle("Pull Results")
     .addFields(
       { name: "Accounts", value: `\`${accountsSuccess} ok / ${accountsFailed} failed\``, inline: true },
       { name: "Codes Fetched", value: `\`${totalFetched}\``, inline: true },
       { name: "\u200b", value: "\u200b", inline: true },
-      { name: "✅ Valid", value: `\`${valid.length}\``, inline: true },
-      { name: "🔄 Used", value: `\`${used.length}\``, inline: true },
-      { name: "⏰ Expired", value: `\`${expired.length}\``, inline: true },
-      { name: "❌ Invalid", value: `\`${invalid.length}\``, inline: true },
-      { name: "⚠️ Errors", value: `\`${errors.length}\``, inline: true },
+      { name: "Valid", value: `\`${valid.length}\``, inline: true },
+      { name: "Used", value: `\`${used.length}\``, inline: true },
+      { name: "Expired", value: `\`${expired.length}\``, inline: true },
+      { name: "Invalid", value: `\`${invalid.length}\``, inline: true },
+      { name: "Errors", value: `\`${errors.length}\``, inline: true },
       { name: "\u200b", value: "\u200b", inline: true }
     );
-
-  return embed;
 }
 
 function errorEmbed(message) {
@@ -138,6 +136,47 @@ function authListEmbed(entries) {
     .setDescription(lines.join("\n"));
 }
 
+function helpEmbed(prefix) {
+  const sections = [
+    "```",
+    "CHECKER",
+    `  ${prefix}check [wlids] + attach codes.txt`,
+    "  Check codes against WLID tokens.",
+    "  Uses stored WLIDs if none provided.",
+    "",
+    "CLAIMER",
+    `  ${prefix}claim <email:pass> or attach .txt`,
+    "  Claim WLID tokens from Microsoft accounts.",
+    "",
+    "PULLER",
+    `  ${prefix}pull <email:pass> or attach .txt`,
+    "  Fetch codes from Game Pass accounts,",
+    "  then validate them automatically.",
+    "",
+    "WLID STORAGE  [Owner]",
+    `  ${prefix}wlidset <tokens> or attach .txt`,
+    "  Replace all stored WLID tokens.",
+    "",
+    "AUTHORIZATION  [Owner]",
+    `  ${prefix}auth <@user> <duration>`,
+    "  Authorize a user. Duration: 1h, 7d, 1mo, forever",
+    `  ${prefix}deauth <@user>`,
+    "  Remove authorization.",
+    `  ${prefix}authlist`,
+    "  List all authorized users.",
+    "",
+    "INFO",
+    `  ${prefix}stats   — Bot status and metrics`,
+    `  ${prefix}help    — This message`,
+    "```",
+  ];
+
+  return header()
+    .setColor(COLORS.PRIMARY)
+    .setTitle("Command Reference")
+    .setDescription(sections.join("\n"));
+}
+
 /**
  * Create a .txt file attachment from an array of strings.
  */
@@ -156,5 +195,6 @@ module.exports = {
   successEmbed,
   infoEmbed,
   authListEmbed,
+  helpEmbed,
   textAttachment,
 };

@@ -902,8 +902,8 @@ client.on("messageCreate", async (message) => {
     }
 
     else if (cmd === "changer") {
-      const hasDm = args.includes("--dm");
-      const filteredArgs = args.filter(a => a !== "--dm");
+      const hasDm = args.some(a => a === "--dm" || a === "—dm" || a === "–dm");
+      const filteredArgs = args.filter(a => a !== "--dm" && a !== "—dm" && a !== "–dm");
       // Last arg is the new password
       const newPassword = filteredArgs.pop();
       const accountsRaw = filteredArgs.join(" ");

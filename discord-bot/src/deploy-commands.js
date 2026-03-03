@@ -56,6 +56,29 @@ const commands = [
     ),
 
   new SlashCommandBuilder()
+    .setName("purchase")
+    .setDescription("Buy items from the Microsoft Store using accounts")
+    .addStringOption((o) =>
+      o.setName("product").setDescription("Product ID or Microsoft Store URL").setRequired(true)
+    )
+    .addAttachmentOption((o) =>
+      o.setName("accounts_file").setDescription("Text file with email:password per line").setRequired(false)
+    )
+    .addStringOption((o) =>
+      o.setName("accounts").setDescription("Accounts as email:password (comma-separated)").setRequired(false)
+    )
+    .addBooleanOption((o) =>
+      o.setName("dm").setDescription("Send results to your DMs instead of the channel").setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("search")
+    .setDescription("Search for products on the Microsoft Store")
+    .addStringOption((o) =>
+      o.setName("query").setDescription("Search query").setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
     .setName("wlidset")
     .setDescription("Set WLID tokens for /check (owner only, replaces previous)")
     .addAttachmentOption((o) =>

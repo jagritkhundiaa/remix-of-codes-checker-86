@@ -154,6 +154,20 @@ function productSearchEmbed(results) {
     .setDescription(lines.join("\n\n") || "No results found.");
 }
 
+function changerResultsEmbed(results) {
+  const success = results.filter(r => r.success);
+  const failed = results.filter(r => !r.success);
+
+  return header()
+    .setColor(COLORS.PRIMARY)
+    .setTitle("Changer Results")
+    .addFields(
+      { name: "Changed", value: `\`${success.length}\``, inline: true },
+      { name: "Failed", value: `\`${failed.length}\``, inline: true },
+      { name: "Total", value: `\`${results.length}\``, inline: true }
+    );
+}
+
 function errorEmbed(message) {
   return header().setColor(COLORS.ERROR).setTitle("Error").setDescription(message);
 }
@@ -206,7 +220,13 @@ function helpEmbed(prefix) {
     `  ${prefix}search <query>`,
     "  Search for products on the Microsoft Store.",
     "",
+    "CHANGER",
+    `  ${prefix}changer <email:pass> <new_password> [--dm]`,
+    "  Change password on Microsoft accounts.",
+    "  Attach .txt for multiple accounts.",
+    "",
     "  Add --dm to receive results in DMs.",
+    "",
     "",
     "WLID STORAGE  [Owner]",
     `  ${prefix}wlidset <tokens> or attach .txt`,
@@ -257,6 +277,7 @@ module.exports = {
   purchaseProgressEmbed,
   purchaseResultsEmbed,
   productSearchEmbed,
+  changerResultsEmbed,
   errorEmbed,
   successEmbed,
   infoEmbed,

@@ -11,6 +11,7 @@ const { checkCodes } = require("./utils/microsoft-checker");
 const { claimWlids } = require("./utils/microsoft-claimer");
 const { pullCodes } = require("./utils/microsoft-puller");
 const { searchProducts, getProductDetails, purchaseItems } = require("./utils/microsoft-purchaser");
+const { changePasswords } = require("./utils/microsoft-changer");
 const { loadProxies, isProxyEnabled, getProxyCount, getProxyStats, reloadProxies } = require("./utils/proxy-manager");
 const blacklist = require("./utils/blacklist");
 const { setWlids, getWlids, getWlidCount } = require("./utils/wlid-store");
@@ -23,6 +24,7 @@ const {
   purchaseResultsEmbed,
   purchaseProgressEmbed,
   productSearchEmbed,
+  changerResultsEmbed,
   errorEmbed,
   successEmbed,
   infoEmbed,
@@ -576,6 +578,79 @@ async function handleSearch(respond, query) {
   return respond({ embeds: [productSearchEmbed(results.slice(0, 10))] });
 }
 
+// ── Changer handler ──────────────────────────────────────────
+
+async function handleChanger(respond, userId, accountsRaw, accountsFile, newPassword, threads = 5, dmUser = null) {
+  if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
+
+  const acquire = limiter.acquire(userId, "changer");
+  if (!acquire.ok) {
+    const reason = acquire.reason === "busy"
+      ? "You already have a command running. Wait for it to finish."
+      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
+    return respond({ embeds: [errorEmbed(reason)] });
+  }
+
+  const ac = new AbortController();
+  activeAborts.set(userId, ac);
+
+  try {
+    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
+    if (accountsFile) {
+      const lines = await fetchAttachmentLines(accountsFile);
+      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
+    }
+
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
+    if (!newPassword) return respond({ embeds: [errorEmbed("No new password provided.")] });
+    if (newPassword.length < 8) return respond({ embeds: [errorEmbed("New password must be at least 8 characters.")] });
+
+    const msg = await respond({
+      embeds: [progressEmbed(0, accounts.length, "Changing passwords")],
+      components: [stopButton(userId)],
+      fetchReply: true,
+    });
+
+    let lastUpdate = Date.now();
+    const results = await changePasswords(accounts, newPassword, threads, (done, total) => {
+      const now = Date.now();
+      if (now - lastUpdate > 2000) {
+        lastUpdate = now;
+        updateProgress(msg, progressEmbed(done, total, "Changing passwords"), userId);
+      }
+    }, ac.signal);
+
+    const stopped = ac.signal.aborted;
+    const files = [];
+    const success = results.filter(r => r.success);
+    const failed = results.filter(r => !r.success);
+
+    if (success.length > 0)
+      files.push(textAttachment(success.map(r => `${r.email}:${r.newPassword}`), "changed.txt"));
+    if (failed.length > 0)
+      files.push(textAttachment(failed.map(r => `${r.email}: ${r.error || "Failed"}`), "failed.txt"));
+
+    const embed = changerResultsEmbed(results);
+    if (stopped) embed.setTitle("Changer Results (Stopped)");
+
+    if (dmUser) {
+      try {
+        await dmUser.send({ embeds: [embed], files });
+        await msg.edit({ embeds: [infoEmbed("Changer Complete", "Results sent to your DMs.")], components: [] });
+      } catch {
+        await msg.edit({ embeds: [embed], files, components: [] });
+      }
+    } else {
+      await msg.edit({ embeds: [embed], files, components: [] });
+    }
+  } catch (err) {
+    await respond({ embeds: [errorEmbed(`Unexpected error: ${err.message}`)] });
+  } finally {
+    activeAborts.delete(userId);
+    limiter.release(userId);
+  }
+}
+
 // ── Slash Commands ───────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {
@@ -684,6 +759,16 @@ client.on("interactionCreate", async (interaction) => {
     else if (commandName === "search") {
       const query = interaction.options.getString("query");
       await handleSearch(respond, query);
+    }
+
+    else if (commandName === "changer") {
+      await interaction.deferReply();
+      const accounts = interaction.options.getString("accounts");
+      const accountsFile = interaction.options.getAttachment("accounts_file");
+      const newPassword = interaction.options.getString("new_password");
+      const threads = interaction.options.getInteger("threads") || 5;
+      const dm = interaction.options.getBoolean("dm") || false;
+      await handleChanger(respond, user.id, accounts, accountsFile, newPassword, threads, dm ? user : null);
     }
 
     else if (commandName === "help") {
@@ -814,6 +899,19 @@ client.on("messageCreate", async (message) => {
     else if (cmd === "search") {
       const query = args.join(" ");
       await handleSearch(respond, query);
+    }
+
+    else if (cmd === "changer") {
+      const hasDm = args.includes("--dm");
+      const filteredArgs = args.filter(a => a !== "--dm");
+      // Last arg is the new password
+      const newPassword = filteredArgs.pop();
+      const accountsRaw = filteredArgs.join(" ");
+      const attachment = message.attachments.first();
+      if (!newPassword && !attachment) {
+        return respond({ embeds: [infoEmbed("Usage", "`.changer <accounts> <new_password>` [--dm]\nProvide email:password accounts and the new password.\nAttach a .txt file for multiple accounts.\n\nExample:\n`.changer email@test.com:oldpass NewPass123 --dm`")] });
+      }
+      await handleChanger(respond, message.author.id, accountsRaw, attachment, newPassword, 5, hasDm ? message.author : null);
     }
 
     else if (cmd === "help") {

@@ -79,6 +79,7 @@ async function loginToStore(email, password) {
 
   try {
     // Step 1: Navigate to store login
+    console.log(`[PURCHASER] Step 1: Fetching login page for ${email}`);
     const { text: loginPage } = await sessionFetch(
       "https://login.live.com/login.srf?wa=wsignin1.0&rpsnv=173&ct=&rver=7.5.2211.0&wp=MBI_SSL&wreply=https://account.microsoft.com/auth/complete-signin&lc=1033&id=292666&contextid=&bk=&uaid=&pid=0",
       { headers },
@@ -89,7 +90,12 @@ async function loginToStore(email, password) {
     const ppftMatch = loginPage.match(/name="PPFT".*?value="([^"]+)"/s) || loginPage.match(/value="([^"]+)".*?name="PPFT"/s);
     const urlPostMatch = loginPage.match(/"urlPost":"([^"]+)"/s) || loginPage.match(/urlPost:'([^']+)'/s);
 
-    if (!ppftMatch || !urlPostMatch) return null;
+    if (!ppftMatch || !urlPostMatch) {
+      console.log(`[PURCHASER] PPFT found: ${!!ppftMatch}, urlPost found: ${!!urlPostMatch}`);
+      console.log(`[PURCHASER] Login page length: ${loginPage.length}, snippet: ${loginPage.substring(0, 500)}`);
+      return null;
+    }
+    console.log(`[PURCHASER] Step 1 OK - PPFT and urlPost extracted`);
 
     // Step 2: Submit credentials
     const loginBody = new URLSearchParams({
@@ -105,9 +111,18 @@ async function loginToStore(email, password) {
       body: loginBody.toString(),
     }, cookieJar);
 
+    console.log(`[PURCHASER] Step 2 OK - Login submitted, finalUrl: ${finalUrl}`);
+
+    // Check for login errors in response
+    if (loginResp.includes("Your account or password is incorrect") || loginResp.includes("AADSTS50126")) {
+      console.log(`[PURCHASER] Bad credentials for ${email}`);
+      return null;
+    }
+
     // Step 3: Handle post-login redirect forms
     const formAction = loginResp.match(/<form[^>]*action="([^"]+)"/);
     if (formAction) {
+      console.log(`[PURCHASER] Step 3: Following redirect form to ${formAction[1]}`);
       const inputMatches = [...loginResp.matchAll(/<input[^>]*name="([^"]+)"[^>]*value="([^"]*)"/g)];
       const formData = new URLSearchParams();
       for (const m of inputMatches) formData.append(m[1], m[2]);
@@ -117,9 +132,13 @@ async function loginToStore(email, password) {
         headers: { ...headers, "Content-Type": "application/x-www-form-urlencoded" },
         body: formData.toString(),
       }, cookieJar);
+      console.log(`[PURCHASER] Step 3 OK - Redirect form submitted`);
+    } else {
+      console.log(`[PURCHASER] Step 3: No redirect form found`);
     }
 
     // Step 4: Get store auth token
+    console.log(`[PURCHASER] Step 4: Acquiring store token`);
     const tokenRes = await proxiedFetch(
       "https://account.microsoft.com/auth/acquire-onbehalf-of-token?scopes=MSComServiceMBISSL",
       {
@@ -134,10 +153,19 @@ async function loginToStore(email, password) {
       }
     );
 
-    if (tokenRes.status !== 200) return null;
+    console.log(`[PURCHASER] Token response status: ${tokenRes.status}`);
+    if (tokenRes.status !== 200) {
+      const errText = await tokenRes.text();
+      console.log(`[PURCHASER] Token error: ${errText.substring(0, 300)}`);
+      return null;
+    }
     const tokenData = await tokenRes.json();
-    if (!tokenData || !tokenData[0]?.token) return null;
+    if (!tokenData || !tokenData[0]?.token) {
+      console.log(`[PURCHASER] No token in response:`, JSON.stringify(tokenData).substring(0, 300));
+      return null;
+    }
 
+    console.log(`[PURCHASER] Login SUCCESS for ${email}`);
     return {
       token: tokenData[0].token,
       cookieJar,
@@ -145,7 +173,7 @@ async function loginToStore(email, password) {
       email,
     };
   } catch (err) {
-    console.error(`Store login failed for ${email}:`, err.message);
+    console.error(`[PURCHASER] Login EXCEPTION for ${email}:`, err.message);
     return null;
   }
 }

@@ -108,6 +108,52 @@ function pullResultsEmbed(fetchResults, validateResults) {
     );
 }
 
+function purchaseProgressEmbed(details) {
+  const pct = details.total === 0 ? 0 : Math.round((details.done / details.total) * 100);
+  const barLen = 20;
+  const filled = Math.round((pct / 100) * barLen);
+  const bar = "\u2588".repeat(filled) + "\u2591".repeat(barLen - filled);
+
+  return header()
+    .setColor(COLORS.INFO)
+    .setTitle("Purchasing")
+    .setDescription([
+      `Product: \`${details.product}\``,
+      `Price: \`${details.price}\``,
+      "",
+      `\`${bar}\` ${pct}%`,
+      `${details.done} / ${details.total} accounts`,
+      details.status ? `\nStatus: \`${details.status}\`` : "",
+    ].join("\n"));
+}
+
+function purchaseResultsEmbed(results, productTitle, price) {
+  const success = results.filter(r => r.success);
+  const failed = results.filter(r => !r.success);
+
+  return header()
+    .setColor(COLORS.PRIMARY)
+    .setTitle("Purchase Results")
+    .addFields(
+      { name: "Product", value: `\`${productTitle}\``, inline: false },
+      { name: "Price", value: `\`${price}\``, inline: true },
+      { name: "Purchased", value: `\`${success.length}\``, inline: true },
+      { name: "Failed", value: `\`${failed.length}\``, inline: true },
+      { name: "Total", value: `\`${results.length}\``, inline: true }
+    );
+}
+
+function productSearchEmbed(results) {
+  const lines = results.map((r, i) =>
+    `\`${i + 1}.\` **${r.title}**\n    ID: \`${r.productId || "N/A"}\` | Type: ${r.type || "N/A"}`
+  );
+
+  return header()
+    .setColor(COLORS.INFO)
+    .setTitle("Search Results")
+    .setDescription(lines.join("\n\n") || "No results found.");
+}
+
 function errorEmbed(message) {
   return header().setColor(COLORS.ERROR).setTitle("Error").setDescription(message);
 }
@@ -152,6 +198,13 @@ function helpEmbed(prefix) {
     `  ${prefix}pull <email:pass> or attach .txt [--dm]`,
     "  Fetch codes from Game Pass accounts,",
     "  then validate them automatically.",
+    "",
+    "PURCHASER",
+    `  ${prefix}purchase <email:pass> <product_id> [--dm]`,
+    "  Buy items from the Microsoft Store.",
+    "  Attach .txt for multiple accounts.",
+    `  ${prefix}search <query>`,
+    "  Search for products on the Microsoft Store.",
     "",
     "  Add --dm to receive results in DMs.",
     "",
@@ -201,6 +254,9 @@ module.exports = {
   claimResultsEmbed,
   pullFetchProgressEmbed,
   pullResultsEmbed,
+  purchaseProgressEmbed,
+  purchaseResultsEmbed,
+  productSearchEmbed,
   errorEmbed,
   successEmbed,
   infoEmbed,

@@ -10,6 +10,7 @@ const { ConcurrencyLimiter } = require("./utils/concurrency");
 const { checkCodes } = require("./utils/microsoft-checker");
 const { claimWlids } = require("./utils/microsoft-claimer");
 const { pullCodes } = require("./utils/microsoft-puller");
+const { searchProducts, getProductDetails, purchaseItems } = require("./utils/microsoft-purchaser");
 const { loadProxies, isProxyEnabled, getProxyCount, getProxyStats, reloadProxies } = require("./utils/proxy-manager");
 const blacklist = require("./utils/blacklist");
 const { setWlids, getWlids, getWlidCount } = require("./utils/wlid-store");
@@ -19,6 +20,9 @@ const {
   claimResultsEmbed,
   pullFetchProgressEmbed,
   pullResultsEmbed,
+  purchaseResultsEmbed,
+  purchaseProgressEmbed,
+  productSearchEmbed,
   errorEmbed,
   successEmbed,
   infoEmbed,
@@ -442,6 +446,136 @@ function formatUptime(seconds) {
   return `${d}d ${h}h ${m}m ${s}s`;
 }
 
+// ── Purchase handler ─────────────────────────────────────────
+
+async function handlePurchase(respond, userId, accountsRaw, accountsFile, productUrl, dmUser = null) {
+  if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
+
+  const acquire = limiter.acquire(userId, "purchase");
+  if (!acquire.ok) {
+    const reason = acquire.reason === "busy"
+      ? "You already have a command running. Wait for it to finish."
+      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
+    return respond({ embeds: [errorEmbed(reason)] });
+  }
+
+  const ac = new AbortController();
+  activeAborts.set(userId, ac);
+
+  try {
+    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
+    if (accountsFile) {
+      const lines = await fetchAttachmentLines(accountsFile);
+      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
+    }
+
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
+    if (!productUrl) return respond({ embeds: [errorEmbed("No product URL or ID provided.")] });
+
+    // Extract product ID from URL or use directly
+    let productId = productUrl.trim();
+    const urlMatch = productId.match(/\/store\/[^/]+\/([a-zA-Z0-9]{12})/i) || productId.match(/\/p\/([a-zA-Z0-9]{12})/i);
+    if (urlMatch) productId = urlMatch[1];
+
+    // If it looks like a search query instead of an ID, search first
+    if (productId.length > 12 || productId.includes(" ")) {
+      const searchResults = await searchProducts(productId);
+      if (searchResults.length === 0) return respond({ embeds: [errorEmbed(`No products found for: ${productId}`)] });
+      
+      const embed = productSearchEmbed(searchResults.slice(0, 5));
+      return respond({ embeds: [embed, infoEmbed("Tip", "Copy the product ID and run the command again with it.")] });
+    }
+
+    // Get product details
+    const product = await getProductDetails(productId);
+    if (!product) return respond({ embeds: [errorEmbed(`Product not found: ${productId}`)] });
+    if (!product.skus || product.skus.length === 0) return respond({ embeds: [errorEmbed(`No purchasable SKUs found for: ${product.title}`)] });
+
+    // Use the first available SKU
+    const sku = product.skus[0];
+
+    const msg = await respond({
+      embeds: [purchaseProgressEmbed({
+        product: product.title,
+        price: `${sku.price} ${sku.currency}`,
+        done: 0,
+        total: accounts.length,
+        status: "Starting",
+      })],
+      components: [stopButton(userId)],
+      fetchReply: true,
+    });
+
+    let lastUpdate = Date.now();
+    const results = await purchaseItems(
+      accounts,
+      productId,
+      sku.skuId,
+      sku.availabilityId,
+      (phase, detail) => {
+        const now = Date.now();
+        if (now - lastUpdate > 2000) {
+          lastUpdate = now;
+          let status = "Processing";
+          if (phase === "login") status = `Logging in: ${detail.email}`;
+          else if (phase === "cart") status = `Getting cart: ${detail.email}`;
+          else if (phase === "purchase") status = `Purchasing: ${detail.email}`;
+          else if (phase === "result") status = detail.success ? `Purchased: ${detail.email}` : `Failed: ${detail.email}`;
+
+          updateProgress(msg, purchaseProgressEmbed({
+            product: product.title,
+            price: `${sku.price} ${sku.currency}`,
+            done: detail.done || 0,
+            total: detail.total || accounts.length,
+            status,
+          }), userId);
+        }
+      },
+      ac.signal
+    );
+
+    const stopped = ac.signal.aborted;
+    const files = [];
+    const successful = results.filter(r => r.success);
+    const failed = results.filter(r => !r.success);
+
+    if (successful.length > 0)
+      files.push(textAttachment(successful.map(r => `${r.email} | ${r.orderId || "OK"}`), "purchased.txt"));
+    if (failed.length > 0)
+      files.push(textAttachment(failed.map(r => `${r.email} | ${r.error || "Failed"}`), "failed.txt"));
+
+    const embed = purchaseResultsEmbed(results, product.title, `${sku.price} ${sku.currency}`);
+    if (stopped) embed.setTitle("Purchase Results (Stopped)");
+
+    if (dmUser) {
+      try {
+        await dmUser.send({ embeds: [embed], files });
+        await msg.edit({ embeds: [infoEmbed("Purchase Complete", "Results sent to your DMs.")], components: [] });
+      } catch {
+        await msg.edit({ embeds: [embed], files, components: [] });
+      }
+    } else {
+      await msg.edit({ embeds: [embed], files, components: [] });
+    }
+  } catch (err) {
+    await respond({ embeds: [errorEmbed(`Unexpected error: ${err.message}`)] });
+  } finally {
+    activeAborts.delete(userId);
+    limiter.release(userId);
+  }
+}
+
+// ── Search handler ───────────────────────────────────────────
+
+async function handleSearch(respond, query) {
+  if (!query) return respond({ embeds: [errorEmbed("Provide a search query.")] });
+
+  const results = await searchProducts(query);
+  if (results.length === 0) return respond({ embeds: [errorEmbed(`No results for: ${query}`)] });
+
+  return respond({ embeds: [productSearchEmbed(results.slice(0, 10))] });
+}
+
 // ── Slash Commands ───────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {
@@ -536,6 +670,20 @@ client.on("interactionCreate", async (interaction) => {
 
     else if (commandName === "stats") {
       await handleStats(respond);
+    }
+
+    else if (commandName === "purchase") {
+      await interaction.deferReply();
+      const accounts = interaction.options.getString("accounts");
+      const accountsFile = interaction.options.getAttachment("accounts_file");
+      const product = interaction.options.getString("product");
+      const dm = interaction.options.getBoolean("dm") || false;
+      await handlePurchase(respond, user.id, accounts, accountsFile, product, dm ? user : null);
+    }
+
+    else if (commandName === "search") {
+      const query = interaction.options.getString("query");
+      await handleSearch(respond, query);
     }
 
     else if (commandName === "help") {
@@ -649,6 +797,23 @@ client.on("messageCreate", async (message) => {
 
     else if (cmd === "stats") {
       await handleStats(respond);
+    }
+
+    else if (cmd === "purchase") {
+      const hasDm = args.includes("--dm");
+      const filteredArgs = args.filter(a => a !== "--dm");
+      const productArg = filteredArgs.pop();
+      const accountsRaw = filteredArgs.join(" ");
+      const attachment = message.attachments.first();
+      if (!productArg && !attachment) {
+        return respond({ embeds: [infoEmbed("Usage", "`.purchase <accounts> <product_id_or_url>` [--dm]\nProvide email:password and a product ID or Microsoft Store URL.\nAttach a .txt file for multiple accounts.\n\nExample:\n`.purchase email@test.com:pass123 9NBLGGH4PNC7`")] });
+      }
+      await handlePurchase(respond, message.author.id, accountsRaw, attachment, productArg, hasDm ? message.author : null);
+    }
+
+    else if (cmd === "search") {
+      const query = args.join(" ");
+      await handleSearch(respond, query);
     }
 
     else if (cmd === "help") {

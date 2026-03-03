@@ -76,7 +76,8 @@ async function loginToAccountLive(email, password, cookieJar, headers, debug) {
   debug("S1", `Redirected to: ${loginUrl.substring(0, 80)}, len: ${loginPage.length}`);
 
   // If we're already on the password change page (unlikely but handle it)
-  if (loginPage.includes("OldPassword") || loginPage.includes("apiCanary")) {
+  // Only consider we're on the password change page if we see the actual form
+  if (loginPage.includes("ChangePassword") && (loginPage.includes("NewPassword") || loginPage.includes("apiCanary"))) {
     debug("S1", "Already on password change page (no login needed)");
     return { success: true, page: loginPage, alreadyOnPwdPage: true };
   }
@@ -141,7 +142,9 @@ async function loginToAccountLive(email, password, cookieJar, headers, debug) {
   }
 
   // If we landed on the password change page already (ideal case)
-  if (afterLogin.includes("OldPassword") || afterLogin.includes("apiCanary")) {
+  // Only trust this if we see actual password change indicators, not just apiCanary
+  if (afterLogin.includes("ChangePassword") && (afterLogin.includes("NewPassword") || 
+      (afterLogin.includes("apiCanary") && afterLogin.includes("password/Change")))) {
     debug("S2", "Landed directly on password change page after login!");
     return { success: true, page: afterLogin, alreadyOnPwdPage: true };
   }
@@ -170,9 +173,9 @@ async function loginToAccountLive(email, password, cookieJar, headers, debug) {
 
   // Submit any remaining intermediate forms (stay signed in, etc.)
   for (let i = 0; i < 5; i++) {
-    // Check if we've reached the password page
-    if (currentPage.includes("OldPassword") || currentPage.includes("apiCanary") ||
-        currentPage.includes("ChangePassword")) {
+    // Check if we've reached the password page - need specific indicators
+    if (currentPage.includes("ChangePassword") && (currentPage.includes("NewPassword") || 
+        currentPage.includes("apiCanary"))) {
       debug("S2", "Reached password change page via intermediate forms");
       return { success: true, page: currentPage, alreadyOnPwdPage: true };
     }
@@ -449,13 +452,14 @@ async function attemptChangePassword(email, oldPassword, newPassword, attempt) {
 
   debug("S2", "Login successful");
 
-  // If login already landed us on the password page, skip navigation
+  // Check if login already landed us on the password page
   let pwdPage;
-  if (loginResult.alreadyOnPwdPage) {
+  if (loginResult.alreadyOnPwdPage && loginResult.page.includes("apiCanary")) {
     debug("S2", "Already on password change page from login flow");
     pwdPage = loginResult.page;
   } else {
-    // Phase 2: Navigate to password change page
+    // Navigate to password change page explicitly
+    // Even if alreadyOnPwdPage was set, if apiCanary is missing we need to navigate
     const navResult = await navigateToPasswordChange(cookieJar, headers, email, debug);
     if (!navResult.success) {
       return { email, ...navResult };
@@ -479,7 +483,7 @@ async function attemptChangePassword(email, oldPassword, newPassword, attempt) {
 
       // Handle intermediate form after re-auth
       const fa = pwdPage.match(/<form[^>]*action="([^"]+)"/);
-      if (fa && !pwdPage.includes("OldPassword")) {
+      if (fa && !pwdPage.includes("ChangePassword")) {
         const im = [...pwdPage.matchAll(/<input[^>]*name="([^"]+)"[^>]*value="([^"]*)"/g)];
         const fd = new URLSearchParams();
         for (const m of im) fd.append(m[1], m[2]);
@@ -493,12 +497,20 @@ async function attemptChangePassword(email, oldPassword, newPassword, attempt) {
       }
 
       // If still not on password page, try navigating again
-      if (!pwdPage.includes("OldPassword") && !pwdPage.includes("apiCanary")) {
+      if (!pwdPage.includes("ChangePassword") && !pwdPage.includes("apiCanary")) {
         await randomDelay(1000, 2000);
         const { text: p2 } = await sessionFetch("https://account.live.com/password/Change", { headers }, cookieJar);
         pwdPage = p2;
       }
     }
+  }
+
+  // Verify we actually have the password change page before submitting
+  if (!pwdPage.includes("apiCanary") && !pwdPage.includes("ChangePassword") && !pwdPage.includes("NewPassword")) {
+    debug("S3", `Not on password change page. Navigating explicitly...`);
+    await randomDelay(500, 1500);
+    const { text: retryPage } = await sessionFetch("https://account.live.com/password/Change", { headers }, cookieJar);
+    pwdPage = retryPage;
   }
 
   // Phase 3: Submit password change

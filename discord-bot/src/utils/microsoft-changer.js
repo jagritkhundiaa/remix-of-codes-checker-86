@@ -277,25 +277,34 @@ async function submitPasswordChange(pageHtml, email, oldPassword, newPassword, c
                            pageHtml.match(/sFT\s*:\s*'([^']+)'/s);
 
     if (apiCanary) {
-      debug("Using API method (JSON)");
-      
-      // Try JSON API first (modern Microsoft account pages)
+      debug("Using API method (JSON) via /API/ChangePassword");
+
+      // Extract uaid from page config
+      const uaidMatch = pageHtml.match(/"uaid"\s*:\s*"([^"]+)"/s) ||
+                        pageHtml.match(/uaid\s*=\s*'([^']+)'/s);
+
+      // Build payload matching Microsoft's current API format
       const jsonBody = JSON.stringify({
-        OldPassword: oldPassword,
-        NewPassword: newPassword,
-        RetypePassword: newPassword,
-        ...(flowTokenMatch ? { FlowToken: flowTokenMatch[1] } : {}),
+        ...(canaryMatch ? { canary: canaryMatch[1] } : {}),
+        ...(sctxMatch ? { sCtx: sctxMatch[1] } : {}),
+        ...(flowTokenMatch ? { token: flowTokenMatch[1] } : { token: null }),
+        password: newPassword,
+        expiryEnabled: false,
+        uiflvr: 1001,
+        ...(uaidMatch ? { uaid: uaidMatch[1] } : {}),
+        scid: 100104,
+        hpgid: 200710,
       });
 
       const { text: changeText, finalUrl: changeFinalUrl } = await sessionFetch(
-        "https://account.live.com/password/Change",
+        "https://account.live.com/API/ChangePassword",
         {
           method: "POST",
           headers: {
             ...headers,
             "Content-Type": "application/json",
             "canary": apiCanary[1],
-            "hpgid": "Microsoft_Security_ChangePassword",
+            "hpgid": "200710",
             "hpgact": "commit",
             "X-Requested-With": "XMLHttpRequest",
           },
@@ -322,6 +331,8 @@ async function submitPasswordChange(pageHtml, email, oldPassword, newPassword, c
             return { email, success: false, error: "New password too short", retryable: false };
           if (String(errCode).includes("SameAsOld"))
             return { email, success: false, error: "New password same as old", retryable: false };
+          if (String(errCode).includes("Banned") || String(errCode).includes("banned"))
+            return { email, success: false, error: "Password is banned/too common", retryable: false };
           return { email, success: false, error: `API error: ${errCode}`, retryable: false };
         }
         if (jsonResponse.success || jsonResponse.State === 1 || jsonResponse.HasSucceeded) {
@@ -329,7 +340,7 @@ async function submitPasswordChange(pageHtml, email, oldPassword, newPassword, c
         }
       }
 
-      // Check HTML response indicators
+      // Check HTML/text response indicators
       if (changeText.includes("TooShort") || changeText.includes("too short"))
         return { email, success: false, error: "New password too short", retryable: false };
       if (changeText.includes("SameAsOld") || changeText.includes("same as your current"))
@@ -344,15 +355,14 @@ async function submitPasswordChange(pageHtml, email, oldPassword, newPassword, c
         return { email, success: true, newPassword, retryable: false };
       }
 
-      // If JSON API didn't work, try form-encoded POST with apiCanary
-      debug("JSON API didn't confirm, trying form-encoded with apiCanary");
-      const { text: formChangeText, finalUrl: formChangeFinalUrl } = await sessionFetch(
+      // Fallback: try legacy form-encoded POST to /password/Change
+      debug("API didn't confirm, trying legacy form-encoded fallback");
+      const { text: formChangeText } = await sessionFetch(
         "https://account.live.com/password/Change",
         {
           method: "POST",
           headers: { ...headers, "Content-Type": "application/x-www-form-urlencoded", canary: apiCanary[1] },
           body: new URLSearchParams({
-            OldPassword: oldPassword,
             NewPassword: newPassword,
             RetypePassword: newPassword,
             ...(canaryMatch ? { canary: canaryMatch[1] } : {}),
@@ -361,9 +371,6 @@ async function submitPasswordChange(pageHtml, email, oldPassword, newPassword, c
         cookieJar
       );
 
-      debug(`Form result URL: ${formChangeFinalUrl.substring(0, 80)}, len: ${formChangeText.length}`);
-      debug(`Form response first 500: ${formChangeText.substring(0, 500)}`);
-
       if (formChangeText.includes("PasswordChanged") || formChangeText.includes("Your password has been changed") ||
           formChangeText.includes("password has been updated") || formChangeText.includes("successfully changed")) {
         return { email, success: true, newPassword, retryable: false };
@@ -371,7 +378,7 @@ async function submitPasswordChange(pageHtml, email, oldPassword, newPassword, c
       if (formChangeText.includes("PasswordIncorrect") || formChangeText.includes("incorrect"))
         return { email, success: false, error: "Current password incorrect", retryable: false };
 
-      debug(`Neither method confirmed. Form first 300: ${formChangeText.substring(0, 300)}`);
+      debug(`Neither method confirmed. Response first 300: ${formChangeText.substring(0, 300)}`);
       return { email, success: false, error: "Password change not confirmed", retryable: false };
     }
 
@@ -383,7 +390,7 @@ async function submitPasswordChange(pageHtml, email, oldPassword, newPassword, c
       debug("Using form method");
       const action = formAction[1].startsWith("http") ? formAction[1] : `https://account.live.com${formAction[1]}`;
 
-      const formBody = new URLSearchParams({ OldPassword: oldPassword, NewPassword: newPassword, RetypePassword: newPassword });
+      const formBody = new URLSearchParams({ NewPassword: newPassword, RetypePassword: newPassword });
       if (canaryMatch) formBody.append("canary", canaryMatch[1]);
 
       const hiddenInputs = [...pageHtml.matchAll(/<input[^>]*type="hidden"[^>]*name="([^"]+)"[^>]*value="([^"]*)"/g)];

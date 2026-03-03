@@ -59,13 +59,21 @@ async function sessionFetch(url, options, cookieJar) {
 
 const PPFT_PATTERNS = [
   /sFT:'([^']+)'/s,
-  /"sFT":"([^"]+)"/s,
+  /sFT\s*:\s*'([^']+)'/s,
+  /"sFT"\s*:\s*"([^"]+)"/s,
   /name="PPFT"[^>]*value="([^"]+)"/s,
   /value="([^"]+)"[^>]*name="PPFT"/s,
+  /name=\\?"PPFT\\?"[^>]*value=\\?"([^"\\]+)\\?"/s,
+  /PPFT[^>]*value="([^"]+)"/s,
+  /sFTTag:\s*'[^']*value="([^"]+)'/s,
 ];
 const URL_POST_PATTERNS = [
-  /"urlPost":"([^"]+)"/s,
+  /"urlPost"\s*:\s*"([^"]+)"/s,
+  /urlPost\s*:\s*'([^']+)'/s,
   /urlPost:'([^']+)'/s,
+  /"urlPost":"([^"]+)"/s,
+  /action="(https:\/\/login\.live\.com\/ppsecure\/post\.srf[^"]*)"/s,
+  /action="(https:\/\/login\.live\.com[^"]*post[^"]*)"/i,
 ];
 
 function extractField(page, patterns) {
@@ -108,6 +116,29 @@ async function attemptChangePassword(email, oldPassword, newPassword, attempt) {
 
   if (!ppft || !urlPost) {
     debug("S1", `Failed to extract login fields (page len: ${loginPage.length})`);
+    // Debug: show snippets to understand the page structure
+    const hasPPFT = loginPage.includes("PPFT");
+    const hasSFT = loginPage.includes("sFT");
+    const hasUrlPost = loginPage.includes("urlPost");
+    const hasPostSrf = loginPage.includes("post.srf");
+    debug("S1", `Contains: PPFT=${hasPPFT}, sFT=${hasSFT}, urlPost=${hasUrlPost}, post.srf=${hasPostSrf}`);
+    // Show a snippet around sFT or urlPost if present
+    const sftIdx = loginPage.indexOf("sFT");
+    if (sftIdx !== -1) debug("S1", `sFT context: ...${loginPage.substring(sftIdx - 10, sftIdx + 80)}...`);
+    const upIdx = loginPage.indexOf("urlPost");
+    if (upIdx !== -1) debug("S1", `urlPost context: ...${loginPage.substring(upIdx - 10, upIdx + 120)}...`);
+    // Check if it's a JavaScript-rendered page
+    if (loginPage.includes("$Config") || loginPage.includes("ServerData")) {
+      debug("S1", "Page uses $Config/ServerData - trying JSON extraction");
+      const configMatch = loginPage.match(/\$Config=(\{[\s\S]*?\});/);
+      if (configMatch) {
+        try {
+          const config = JSON.parse(configMatch[1]);
+          if (config.sFT) debug("S1", `Found sFT in $Config: ${config.sFT.substring(0, 30)}...`);
+          if (config.urlPost) debug("S1", `Found urlPost in $Config: ${config.urlPost}`);
+        } catch {}
+      }
+    }
     return { email, success: false, error: "Could not extract login form", retryable: false };
   }
 

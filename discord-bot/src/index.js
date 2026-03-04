@@ -15,6 +15,7 @@ const { claimWlids } = require("./utils/microsoft-claimer");
 const { pullCodes } = require("./utils/microsoft-puller");
 const { searchProducts, getProductDetails, purchaseItems } = require("./utils/microsoft-purchaser");
 const { changePasswords, checkAccounts } = require("./utils/microsoft-changer");
+const { initiateRecovery, submitCaptchaAndContinue, submitNewPassword, downloadCaptchaImage } = require("./utils/microsoft-recover");
 const { loadProxies, isProxyEnabled, getProxyCount, getProxyStats, reloadProxies } = require("./utils/proxy-manager");
 const blacklist = require("./utils/blacklist");
 const { setWlids, getWlids, getWlidCount } = require("./utils/wlid-store");
@@ -37,6 +38,8 @@ const {
   adminPanelEmbed,
   detailedStatsEmbed,
   textAttachment,
+  recoverProgressEmbed,
+  recoverResultEmbed,
 } = require("./utils/embeds");
 
 const client = new Client({
@@ -58,6 +61,9 @@ let webhookUrl = "";
 
 // Active abort controllers per user
 const activeAborts = new Map();
+
+// Active recovery sessions per user (for multi-step CAPTCHA flow)
+const activeRecoverySessions = new Map();
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -784,6 +790,111 @@ async function handleBotStats(respond, callerId) {
   return respond({ embeds: [detailedStatsEmbed(stats, topUsers)] });
 }
 
+// ── Account Recovery Handler ─────────────────────────────────
+
+async function handleRecover(respond, userId, email, newPassword, interaction, message) {
+  if (!isOwner(userId) && !auth.isAuthorized(userId)) {
+    return respond({ embeds: [errorEmbed("Not authorized. Ask the owner to run `/auth`.")] });
+  }
+  if (blacklist.isBlacklisted(userId)) {
+    return respond({ embeds: [errorEmbed("You are blacklisted.")] });
+  }
+  if (!email) {
+    return respond({ embeds: [errorEmbed("Provide an email address to recover.")] });
+  }
+  if (!newPassword) {
+    return respond({ embeds: [errorEmbed("Provide the new password to set.")] });
+  }
+
+  await respond({ embeds: [recoverProgressEmbed(email, "Initiating recovery...")] });
+
+  const result = await initiateRecovery(email);
+
+  if (!result.success) {
+    return respond({ embeds: [recoverResultEmbed(email, false, result.error)] });
+  }
+
+  if (result.phase === "password_reset") {
+    // No CAPTCHA needed — submit password directly
+    const pwResult = await submitNewPassword(result, newPassword);
+    statsManager.recordResult(userId, pwResult.success ? "success" : "failed");
+    return respond({ embeds: [recoverResultEmbed(email, pwResult.success, pwResult.success ? pwResult.message : pwResult.error)] });
+  }
+
+  if (result.phase === "captcha_required") {
+    // Store session for this user
+    activeRecoverySessions.set(userId, { ...result, newPassword });
+
+    const captchaType = result.captchaInfo.type || "unknown";
+    let captchaMsg = `CAPTCHA required (type: \`${captchaType}\`).\n\n`;
+
+    // Try to download and send HIP image
+    if (result.captchaInfo.type === "hip" && result.captchaInfo.imageUrl) {
+      const imgBuffer = await downloadCaptchaImage(result.captchaInfo.imageUrl, result.cookieJar);
+      if (imgBuffer) {
+        const { AttachmentBuilder } = require("discord.js");
+        const attachment = new AttachmentBuilder(imgBuffer, { name: "captcha.png" });
+        captchaMsg += "Solve the CAPTCHA below and reply with:\n`/captcha <solution>`\nor `.captcha <solution>`";
+        return respond({
+          embeds: [recoverProgressEmbed(email, captchaMsg)],
+          files: [attachment],
+        });
+      }
+    }
+
+    if (result.captchaInfo.type === "funcaptcha") {
+      captchaMsg += `FunCaptcha site key: \`${result.captchaInfo.siteKey || "N/A"}\`\n`;
+      captchaMsg += `Page URL: \`${result.pageUrl}\`\n\n`;
+      captchaMsg += "Solve the FunCaptcha externally, then reply with:\n`/captcha <token>`\nor `.captcha <token>`";
+    } else {
+      captchaMsg += "Solve the CAPTCHA externally, then reply with:\n`/captcha <solution>`\nor `.captcha <solution>`";
+    }
+
+    return respond({ embeds: [recoverProgressEmbed(email, captchaMsg)] });
+  }
+
+  if (result.phase === "verify_identity") {
+    const options = result.verifyInfo.options.map((o) => `\`${o.index}\`: ${o.label}`).join("\n");
+    return respond({
+      embeds: [recoverProgressEmbed(email, `Identity verification required.\n\nOptions:\n${options}\n\nThis flow requires selecting a verification method — not yet automated.`)],
+    });
+  }
+
+  return respond({ embeds: [recoverResultEmbed(email, false, `Unexpected page (phase: ${result.phase}). URL: ${result.pageUrl}`)] });
+}
+
+async function handleCaptchaSolve(respond, userId, solution) {
+  const session = activeRecoverySessions.get(userId);
+  if (!session) {
+    return respond({ embeds: [errorEmbed("No active recovery session. Start one with `/recover` first.")] });
+  }
+
+  await respond({ embeds: [recoverProgressEmbed(session.email, "Submitting CAPTCHA solution...")] });
+
+  const result = await submitCaptchaAndContinue(session, solution);
+
+  if (!result.success) {
+    activeRecoverySessions.delete(userId);
+    return respond({ embeds: [recoverResultEmbed(session.email, false, result.error)] });
+  }
+
+  if (result.phase === "password_reset") {
+    const pwResult = await submitNewPassword(result, session.newPassword);
+    activeRecoverySessions.delete(userId);
+    statsManager.recordResult(userId, pwResult.success ? "success" : "failed");
+    return respond({ embeds: [recoverResultEmbed(session.email, pwResult.success, pwResult.success ? pwResult.message : pwResult.error)] });
+  }
+
+  if (result.phase === "captcha_required") {
+    // Another CAPTCHA — update session
+    activeRecoverySessions.set(userId, { ...result, email: session.email, newPassword: session.newPassword });
+    return respond({ embeds: [recoverProgressEmbed(session.email, "Another CAPTCHA required. Solve and reply with `/captcha <solution>` again.")] });
+  }
+
+  activeRecoverySessions.delete(userId);
+  return respond({ embeds: [recoverResultEmbed(session.email, false, `Unexpected result (phase: ${result.phase})`)] });
+}
+
 // ── Slash Commands ───────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {
@@ -915,6 +1026,19 @@ client.on("interactionCreate", async (interaction) => {
 
     else if (commandName === "help") {
       await respond({ embeds: [helpEmbed("/")] });
+    }
+
+    else if (commandName === "recover") {
+      await interaction.deferReply();
+      const email = interaction.options.getString("email");
+      const newPassword = interaction.options.getString("new_password");
+      await handleRecover(respond, user.id, email, newPassword, interaction);
+    }
+
+    else if (commandName === "captcha") {
+      await interaction.deferReply();
+      const solution = interaction.options.getString("solution");
+      await handleCaptchaSolve(respond, user.id, solution);
     }
 
     // ── Admin commands ──
@@ -1083,6 +1207,23 @@ client.on("messageCreate", async (message) => {
 
     else if (cmd === "help") {
       return respond({ embeds: [helpEmbed(config.PREFIX)] });
+    }
+
+    else if (cmd === "recover") {
+      const newPassword = args.pop();
+      const email = args.join(" ");
+      if (!email || !newPassword) {
+        return respond({ embeds: [infoEmbed("Usage", "`.recover <email> <new_password>`\n\nInitiate account recovery for a Microsoft account.\n\nExample:\n`.recover email@test.com NewPass123`")] });
+      }
+      await handleRecover(respond, message.author.id, email, newPassword, null, message);
+    }
+
+    else if (cmd === "captcha") {
+      const solution = args.join(" ");
+      if (!solution) {
+        return respond({ embeds: [infoEmbed("Usage", "`.captcha <solution>`\n\nSubmit the CAPTCHA solution for an active recovery session.")] });
+      }
+      await handleCaptchaSolve(respond, message.author.id, solution);
     }
 
     // ── Admin commands (prefix) ──

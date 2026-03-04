@@ -271,7 +271,7 @@ function extractVerificationOptions(html) {
   }
 
   // Alternative: radio buttons with proof options
-  const radioMatches = [...html.matchAll(/<input[^>]*name="Proof"[^>]*value="([^"]+)"[^>]*>[\s\S]*?<label[^>]*>([^<]+)</label>/g)];
+  const radioMatches = [...html.matchAll(/<input[^>]*name="Proof"[^>]*value="([^"]+)"[^>]*>[^<]*(?:<[^l][^>]*>[^<]*)*<label[^>]*>([^<]+)<\/label>/g)];
   if (radioMatches.length > 0) {
     result.hasOptions = true;
     result.options = radioMatches.map((m, i) => ({ index: i, value: m[1], label: m[2].trim() }));

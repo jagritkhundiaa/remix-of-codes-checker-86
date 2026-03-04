@@ -442,12 +442,28 @@ function extractPageTokens(html) {
 function analyzeResultPage(html, pageUrl, email, cookieJar, headers) {
   log("[analyze] URL:", pageUrl);
 
-  // Check for password reset page
-  if (html.includes("iResetPwdInput") || html.includes("NewPassword") ||
-      html.includes("newPassword") || html.includes("ResetPassword") ||
-      html.includes("resetPassword") || html.includes("PasswordReset") ||
-      pageUrl.includes("password/reset") || pageUrl.includes("password/Reset") ||
-      pageUrl.includes("ResetPassword")) {
+  const pageUrlLower = String(pageUrl || "").toLowerCase();
+
+  // If Microsoft routed to error.aspx, do not treat this as password reset.
+  const errorCodeMatch = pageUrlLower.match(/\/error\.aspx\?[^#]*(?:errcode|e)=(\d+)/i);
+  if (errorCodeMatch) {
+    const errorCode = errorCodeMatch[1];
+    log("[analyze] -> error.aspx detected with code:", errorCode);
+    return { success: false, error: `Microsoft recovery error code ${errorCode}`, phase: "error" };
+  }
+
+  // Check for password reset page (strict markers only)
+  const hasResetFormMarker =
+    html.includes("id=\"iResetPwdInput\"") ||
+    html.includes("name=\"NewPassword\"") ||
+    html.includes("name=\"ConfirmPassword\"") ||
+    html.includes("id=\"iPwd\"");
+  const hasResetUrlMarker =
+    pageUrlLower.includes("/password/reset") ||
+    pageUrlLower.includes("/password/resetpassword") ||
+    pageUrlLower.includes("/resetpassword");
+
+  if ((hasResetFormMarker || hasResetUrlMarker) && !pageUrlLower.includes("/error.aspx")) {
     log("[analyze] -> password_reset page detected");
     return {
       success: true,

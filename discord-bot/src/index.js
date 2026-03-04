@@ -799,7 +799,7 @@ async function recoverSingleEmail(email, newPassword, userId) {
   }
   if (result.phase === "password_reset") {
     const pwResult = await submitNewPassword(result, newPassword);
-    statsManager.recordResult(userId, pwResult.success ? "success" : "failed");
+    statsManager.record(userId, "recover", !!pwResult.success);
     return { email, success: pwResult.success, message: pwResult.success ? pwResult.message : pwResult.error };
   }
   if (result.phase === "captcha_required") {
@@ -823,11 +823,21 @@ async function handleRecover(respond, userId, emailsRaw, emailsFile, newPassword
   }
 
   // Collect emails from input + file
-  let emails = splitInput(emailsRaw).map(e => e.trim().toLowerCase()).filter(e => e.includes("@"));
+  let emails = splitInput(emailsRaw)
+    .map((e) => e.trim().toLowerCase())
+    .map((e) => (e.includes(":") ? e.split(":")[0].trim() : e))
+    .filter((e) => e.includes("@") && !e.includes(" "));
   if (emailsFile) {
     const lines = await fetchAttachmentLines(emailsFile);
-    emails = emails.concat(lines.map(l => l.trim().toLowerCase()).filter(l => l.includes("@")));
+    emails = emails.concat(
+      lines
+        .map((l) => l.trim().toLowerCase())
+        .map((l) => (l.includes(":") ? l.split(":")[0].trim() : l))
+        .filter((l) => l.includes("@") && !l.includes(" "))
+    );
   }
+
+  emails = [...new Set(emails)];
 
   if (emails.length === 0) {
     return respond({ embeds: [errorEmbed("No emails provided. Provide email(s) or attach a `.txt` file.")] });
@@ -846,7 +856,7 @@ async function handleRecover(respond, userId, emailsRaw, emailsFile, newPassword
 
     if (result.phase === "password_reset") {
       const pwResult = await submitNewPassword(result, newPassword);
-      statsManager.recordResult(userId, pwResult.success ? "success" : "failed");
+      statsManager.record(userId, "recover", !!pwResult.success);
       return respond({ embeds: [recoverResultEmbed(email, pwResult.success, pwResult.success ? pwResult.message : pwResult.error)] });
     }
 
@@ -953,7 +963,7 @@ async function handleCaptchaSolve(respond, userId, solution) {
   if (result.phase === "password_reset") {
     const pwResult = await submitNewPassword(result, session.newPassword);
     activeRecoverySessions.delete(userId);
-    statsManager.recordResult(userId, pwResult.success ? "success" : "failed");
+    statsManager.record(userId, "recover", !!pwResult.success);
     return respond({ embeds: [recoverResultEmbed(session.email, pwResult.success, pwResult.success ? pwResult.message : pwResult.error)] });
   }
 

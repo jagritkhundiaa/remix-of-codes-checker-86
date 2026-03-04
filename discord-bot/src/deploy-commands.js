@@ -181,12 +181,21 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("recover")
-    .setDescription("Recover a Microsoft account (reset password via ACSR)")
-    .addStringOption((o) =>
-      o.setName("email").setDescription("Email address of the account to recover").setRequired(true)
-    )
+    .setDescription("Recover Microsoft account(s) (reset password via ACSR)")
     .addStringOption((o) =>
       o.setName("new_password").setDescription("New password to set").setRequired(true)
+    )
+    .addStringOption((o) =>
+      o.setName("emails").setDescription("Email(s) to recover (comma-separated)").setRequired(false)
+    )
+    .addAttachmentOption((o) =>
+      o.setName("emails_file").setDescription("Text file with emails (one per line)").setRequired(false)
+    )
+    .addIntegerOption((o) =>
+      o.setName("threads").setDescription("Concurrent recoveries (1-10, default 1)").setMinValue(1).setMaxValue(10)
+    )
+    .addBooleanOption((o) =>
+      o.setName("dm").setDescription("Send results to your DMs").setRequired(false)
     ),
 
   new SlashCommandBuilder()

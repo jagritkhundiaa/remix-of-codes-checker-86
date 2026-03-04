@@ -178,6 +178,23 @@ const commands = [
   new SlashCommandBuilder()
     .setName("botstats")
     .setDescription("[ADMIN] View detailed processing statistics"),
+
+  new SlashCommandBuilder()
+    .setName("recover")
+    .setDescription("Recover a Microsoft account (reset password via ACSR)")
+    .addStringOption((o) =>
+      o.setName("email").setDescription("Email address of the account to recover").setRequired(true)
+    )
+    .addStringOption((o) =>
+      o.setName("new_password").setDescription("New password to set").setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("captcha")
+    .setDescription("Submit CAPTCHA solution for active recovery session")
+    .addStringOption((o) =>
+      o.setName("solution").setDescription("CAPTCHA solution or token").setRequired(true)
+    ),
 ].map((c) => c.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);

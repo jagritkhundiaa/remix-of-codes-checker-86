@@ -247,7 +247,11 @@ function helpEmbed(prefix) {
     `  ${prefix}checker <email:pass> or attach .txt [--dm]`,
     "  Validate account credentials (valid/locked/invalid).",
     "",
-    "  Add --dm to receive results in DMs.",
+    "RECOVERY",
+    `  ${prefix}recover <email> <new_password>`,
+    "  Recover account via ACSR (CAPTCHA may be required).",
+    `  ${prefix}captcha <solution>`,
+    "  Submit CAPTCHA solution for active recovery.",
     "",
     "",
     "WLID STORAGE  [Owner]",
@@ -325,6 +329,26 @@ function textAttachment(lines, filename) {
   return new AttachmentBuilder(buffer, { name: filename });
 }
 
+function recoverProgressEmbed(email, status) {
+  return header()
+    .setColor(COLORS.INFO)
+    .setTitle("Account Recovery")
+    .addFields(
+      { name: "Account", value: `\`${email}\``, inline: true },
+    )
+    .setDescription(status);
+}
+
+function recoverResultEmbed(email, success, message) {
+  return header()
+    .setColor(success ? COLORS.SUCCESS : COLORS.ERROR)
+    .setTitle(success ? "Recovery Successful" : "Recovery Failed")
+    .addFields(
+      { name: "Account", value: `\`${email}\``, inline: true },
+    )
+    .setDescription(message || (success ? "Password has been reset." : "Recovery failed."));
+}
+
 module.exports = {
   progressEmbed,
   checkResultsEmbed,
@@ -344,4 +368,6 @@ module.exports = {
   adminPanelEmbed,
   detailedStatsEmbed,
   textAttachment,
+  recoverProgressEmbed,
+  recoverResultEmbed,
 };

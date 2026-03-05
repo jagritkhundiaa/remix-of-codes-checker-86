@@ -372,6 +372,8 @@ def _attempt_check(email, password, search_keyword=None):
                 pass
 
         # ── Step 5: Mail folders + inbox search (needs access_token) ──
+        # .svb uses X-AnchorMailbox: CID:<refresh_token> for substrate routing
+        anchor = f"CID:{refresh_token}" if refresh_token else ""
         if access_token and access_token.startswith("Ew"):
             mail_headers = {
                 "User-Agent": "Outlook-Android/2.0",
@@ -379,6 +381,7 @@ def _attempt_check(email, password, search_keyword=None):
                 "Accept": "application/json",
                 "ForceSync": "false",
                 "Authorization": f"Bearer {access_token}",
+                "X-AnchorMailbox": anchor,
                 "Host": "substrate.office.com",
                 "Connection": "Keep-Alive",
                 "Accept-Encoding": "gzip",

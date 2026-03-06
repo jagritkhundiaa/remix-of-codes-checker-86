@@ -217,22 +217,35 @@ def check_account(credential):
 
 
 def check_accounts(credentials, threads=15, on_progress=None, stop_event=None):
-    results = []
-    done = 0
+    if not credentials:
+        return []
+
+    total = len(credentials)
+    done = [0]
+    lock = threading.Lock()
 
     def worker(cred):
-        nonlocal done
-        if stop_event and stop_event.is_set():
-            return None
-        r = check_account(cred)
-        done += 1
-        if on_progress:
-            on_progress(done, len(credentials))
-        return r
+        try:
+            if stop_event and stop_event.is_set():
+                return None
+            return check_account(cred)
+        except Exception as ex:
+            user = cred.split(":", 1)[0] if ":" in cred else cred
+            password = cred.split(":", 1)[1] if ":" in cred else ""
+            return {"status": "fail", "user": user, "password": password, "detail": str(ex)}
+        finally:
+            with lock:
+                done[0] += 1
+                if on_progress:
+                    try:
+                        on_progress(done[0], total)
+                    except Exception:
+                        pass
 
-    with ThreadPoolExecutor(max_workers=min(threads, len(credentials))) as pool:
+    max_workers = max(1, min(threads or 1, total))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futs = {pool.submit(worker, c): i for i, c in enumerate(credentials)}
-        ordered = [None] * len(credentials)
+        ordered = [None] * total
         for fut in as_completed(futs):
             idx = futs[fut]
             try:

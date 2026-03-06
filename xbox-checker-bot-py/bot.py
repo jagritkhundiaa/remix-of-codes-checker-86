@@ -52,6 +52,28 @@ async def fetch_lines(att):
     except Exception:
         return []
 
+def extract_combos(lines):
+    """Extract only email:pass from lines, stripping captures/extra data.
+    Returns (combos, had_extra) where had_extra is True if any line had more than email:pass."""
+    combos = []
+    had_extra = False
+    for line in lines:
+        if ":" not in line:
+            continue
+        # Split on | first (common capture separator), take first part
+        base = line.split("|")[0].strip()
+        # Now extract email:pass (first two colon-separated fields)
+        parts = base.split(":")
+        if len(parts) >= 2:
+            email = parts[0].strip()
+            password = parts[1].strip()
+            if email and password:
+                combos.append(f"{email}:{password}")
+                # Check if original line had extra data
+                if len(parts) > 2 or "|" in line:
+                    had_extra = True
+    return list(set(combos)), had_extra
+
 # ── Shared logic ──
 
 async def do_xbox_check(ctx_or_inter, accounts, threads, is_slash=False):

@@ -1047,7 +1047,7 @@ client.on("interactionCreate", async (interaction) => {
       const accounts = interaction.options.getString("accounts");
       const accountsFile = interaction.options.getAttachment("accounts_file");
       const dm = interaction.options.getBoolean("dm") || false;
-      await handlePull(respond, user.id, accounts, accountsFile, dm ? user : null);
+      await handlePull(respond, user.id, accounts, accountsFile, dm ? user : null, user.username);
     }
 
     else if (commandName === "wlidset") {

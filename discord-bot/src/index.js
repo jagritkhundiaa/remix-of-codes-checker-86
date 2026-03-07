@@ -1029,8 +1029,7 @@ client.on("interactionCreate", async (interaction) => {
       const codes = interaction.options.getString("codes");
       const codesFile = interaction.options.getAttachment("codes_file");
       const threads = interaction.options.getInteger("threads") || 10;
-      const dm = interaction.options.getBoolean("dm") || false;
-      await handleCheck(respond, user.id, wlids, codes, codesFile, threads, dm ? user : null);
+      await handleCheck(respond, user.id, wlids, codes, codesFile, threads, user);
     }
 
     else if (commandName === "claim") {
@@ -1038,16 +1037,14 @@ client.on("interactionCreate", async (interaction) => {
       const accounts = interaction.options.getString("accounts");
       const accountsFile = interaction.options.getAttachment("accounts_file");
       const threads = interaction.options.getInteger("threads") || 5;
-      const dm = interaction.options.getBoolean("dm") || false;
-      await handleClaim(respond, user.id, accounts, accountsFile, threads, dm ? user : null);
+      await handleClaim(respond, user.id, accounts, accountsFile, threads, user);
     }
 
     else if (commandName === "pull") {
       await interaction.deferReply();
       const accounts = interaction.options.getString("accounts");
       const accountsFile = interaction.options.getAttachment("accounts_file");
-      const dm = interaction.options.getBoolean("dm") || false;
-      await handlePull(respond, user.id, accounts, accountsFile, dm ? user : null, user.username);
+      await handlePull(respond, user.id, accounts, accountsFile, user, user.username);
     }
 
     else if (commandName === "wlidset") {
@@ -1095,8 +1092,7 @@ client.on("interactionCreate", async (interaction) => {
       const accounts = interaction.options.getString("accounts");
       const accountsFile = interaction.options.getAttachment("accounts_file");
       const product = interaction.options.getString("product");
-      const dm = interaction.options.getBoolean("dm") || false;
-      await handlePurchase(respond, user.id, accounts, accountsFile, product, dm ? user : null);
+      await handlePurchase(respond, user.id, accounts, accountsFile, product, user);
     }
 
     else if (commandName === "search") {
@@ -1110,8 +1106,7 @@ client.on("interactionCreate", async (interaction) => {
       const accountsFile = interaction.options.getAttachment("accounts_file");
       const newPassword = interaction.options.getString("new_password");
       const threads = interaction.options.getInteger("threads") || 5;
-      const dm = interaction.options.getBoolean("dm") || false;
-      await handleChanger(respond, user.id, accounts, accountsFile, newPassword, threads, dm ? user : null);
+      await handleChanger(respond, user.id, accounts, accountsFile, newPassword, threads, user);
     }
 
     else if (commandName === "checker") {
@@ -1119,8 +1114,7 @@ client.on("interactionCreate", async (interaction) => {
       const accounts = interaction.options.getString("accounts");
       const accountsFile = interaction.options.getAttachment("accounts_file");
       const threads = interaction.options.getInteger("threads") || 5;
-      const dm = interaction.options.getBoolean("dm") || false;
-      await handleAccountChecker(respond, user.id, accounts, accountsFile, threads, dm ? user : null);
+      await handleAccountChecker(respond, user.id, accounts, accountsFile, threads, user);
     }
 
     else if (commandName === "help") {
@@ -1133,8 +1127,7 @@ client.on("interactionCreate", async (interaction) => {
       const emailsFile = interaction.options.getAttachment("emails_file");
       const newPassword = interaction.options.getString("new_password");
       const threads = interaction.options.getInteger("threads") || 1;
-      const dm = interaction.options.getBoolean("dm") || false;
-      await handleRecover(respond, user.id, emailsRaw, emailsFile, newPassword, threads, dm ? user : null, interaction);
+      await handleRecover(respond, user.id, emailsRaw, emailsFile, newPassword, threads, user, interaction);
     }
 
     else if (commandName === "captcha") {

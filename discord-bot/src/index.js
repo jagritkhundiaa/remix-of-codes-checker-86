@@ -1010,6 +1010,11 @@ client.on("interactionCreate", async (interaction) => {
 
   if (!interaction.isChatInputCommand()) return;
 
+  // Channel lock enforcement
+  if (!isAllowedChannel(interaction.channelId)) {
+    return interaction.reply({ embeds: [errorEmbed(`Commands are restricted to <#${config.ALLOWED_CHANNEL_ID}>.`)], ephemeral: true });
+  }
+
   const respond = (opts) => {
     if (interaction.deferred || interaction.replied) return interaction.editReply(opts);
     return interaction.reply(opts);

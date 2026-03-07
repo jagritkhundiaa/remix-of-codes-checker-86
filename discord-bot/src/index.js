@@ -72,6 +72,11 @@ function isOwner(userId) {
   return userId === config.OWNER_ID;
 }
 
+function isAllowedChannel(channelId) {
+  if (!config.ALLOWED_CHANNEL_ID) return true;
+  return channelId === config.ALLOWED_CHANNEL_ID;
+}
+
 function canUse(userId) {
   if (blacklist.isBlacklisted(userId)) return false;
   const allowed = isOwner(userId) || auth.isAuthorized(userId);

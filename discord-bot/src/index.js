@@ -33,6 +33,7 @@ const {
   errorEmbed,
   successEmbed,
   infoEmbed,
+  ownerOnlyEmbed,
   authListEmbed,
   helpEmbed,
   adminPanelEmbed,
@@ -69,6 +70,11 @@ const activeRecoverySessions = new Map();
 
 function isOwner(userId) {
   return userId === config.OWNER_ID;
+}
+
+function isAllowedChannel(channelId) {
+  if (!config.ALLOWED_CHANNEL_ID) return true;
+  return channelId === config.ALLOWED_CHANNEL_ID;
 }
 
 function canUse(userId) {
@@ -276,7 +282,7 @@ async function handleClaim(respond, userId, accountsRaw, accountsFile, threads =
 
 // ── Pull handler ─────────────────────────────────────────────
 
-async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = null) {
+async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = null, username = null) {
   if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
 
   const acquire = limiter.acquire(userId, "pull");
@@ -289,6 +295,7 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
 
   const ac = new AbortController();
   activeAborts.set(userId, ac);
+  const startTime = Date.now();
 
   try {
     let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
@@ -341,6 +348,7 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
       }
     }, ac.signal);
 
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const stopped = ac.signal.aborted;
     const files = [];
     const valid = validateResults.filter((r) => r.status === "valid");
@@ -357,13 +365,17 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
     if (invalid.length > 0)
       files.push(textAttachment(invalid.map((r) => r.code), "invalid.txt"));
 
-    const embed = pullResultsEmbed(fetchResults, validateResults);
-    if (stopped) embed.setTitle("Pull Results (Stopped)");
+    const embed = pullResultsEmbed(fetchResults, validateResults, {
+      elapsed,
+      dmSent: !!dmUser,
+      username: username || undefined,
+    });
+    if (stopped) embed.setDescription(embed.data.description + "\n\n*Stopped -- partial results*");
 
     if (dmUser) {
       try {
         await dmUser.send({ embeds: [embed], files });
-        await msg.edit({ embeds: [infoEmbed("Pull Complete", "Results sent to your DMs.")], components: [] });
+        await msg.edit({ embeds: [pullResultsEmbed(fetchResults, validateResults, { elapsed, dmSent: true, username: username || undefined })], components: [] });
       } catch {
         await msg.edit({ embeds: [embed], files, components: [] });
       }
@@ -470,7 +482,7 @@ function formatUptime(seconds) {
 // ── Purchase handler ─────────────────────────────────────────
 
 async function handlePurchase(respond, userId, accountsRaw, accountsFile, productUrl, dmUser = null) {
-  if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
+  if (!isOwner(userId)) return respond({ embeds: [ownerOnlyEmbed("Purchaser")] });
 
   const acquire = limiter.acquire(userId, "purchase");
   if (!acquire.ok) {
@@ -600,7 +612,7 @@ async function handleSearch(respond, query) {
 // ── Changer handler ──────────────────────────────────────────
 
 async function handleChanger(respond, userId, accountsRaw, accountsFile, newPassword, threads = 5, dmUser = null) {
-  if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
+  if (!isOwner(userId)) return respond({ embeds: [ownerOnlyEmbed("Changer")] });
 
   const acquire = limiter.acquire(userId, "changer");
   if (!acquire.ok) {
@@ -998,6 +1010,11 @@ client.on("interactionCreate", async (interaction) => {
 
   if (!interaction.isChatInputCommand()) return;
 
+  // Channel lock enforcement
+  if (!isAllowedChannel(interaction.channelId)) {
+    return interaction.reply({ embeds: [errorEmbed(`Commands are restricted to <#${config.ALLOWED_CHANNEL_ID}>.`)], ephemeral: true });
+  }
+
   const respond = (opts) => {
     if (interaction.deferred || interaction.replied) return interaction.editReply(opts);
     return interaction.reply(opts);
@@ -1030,7 +1047,7 @@ client.on("interactionCreate", async (interaction) => {
       const accounts = interaction.options.getString("accounts");
       const accountsFile = interaction.options.getAttachment("accounts_file");
       const dm = interaction.options.getBoolean("dm") || false;
-      await handlePull(respond, user.id, accounts, accountsFile, dm ? user : null);
+      await handlePull(respond, user.id, accounts, accountsFile, dm ? user : null, user.username);
     }
 
     else if (commandName === "wlidset") {
@@ -1151,6 +1168,9 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   if (!message.content.startsWith(config.PREFIX)) return;
 
+  // Channel lock enforcement
+  if (!isAllowedChannel(message.channelId)) return;
+
   const args = message.content.slice(config.PREFIX.length).trim().split(/\s+/);
   const cmd = args.shift()?.toLowerCase();
   if (!cmd) return;
@@ -1190,7 +1210,7 @@ client.on("messageCreate", async (message) => {
       if (!accountsRaw && !attachment) {
         return respond({ embeds: [infoEmbed("Usage", "`.pull <accounts>` [--dm]\nProvide email:password comma-separated or attach a `.txt` file.\nAdd `--dm` to receive results in DMs.\n\nExample:\n`.pull email@test.com:pass123 --dm`")] });
       }
-      await handlePull(respond, message.author.id, accountsRaw, attachment, hasDm ? message.author : null);
+      await handlePull(respond, message.author.id, accountsRaw, attachment, hasDm ? message.author : null, message.author.username);
     }
 
     else if (cmd === "wlidset") {

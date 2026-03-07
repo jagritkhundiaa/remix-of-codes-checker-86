@@ -1029,8 +1029,7 @@ client.on("interactionCreate", async (interaction) => {
       const codes = interaction.options.getString("codes");
       const codesFile = interaction.options.getAttachment("codes_file");
       const threads = interaction.options.getInteger("threads") || 10;
-      const dm = interaction.options.getBoolean("dm") || false;
-      await handleCheck(respond, user.id, wlids, codes, codesFile, threads, dm ? user : null);
+      await handleCheck(respond, user.id, wlids, codes, codesFile, threads, user);
     }
 
     else if (commandName === "claim") {
@@ -1038,16 +1037,14 @@ client.on("interactionCreate", async (interaction) => {
       const accounts = interaction.options.getString("accounts");
       const accountsFile = interaction.options.getAttachment("accounts_file");
       const threads = interaction.options.getInteger("threads") || 5;
-      const dm = interaction.options.getBoolean("dm") || false;
-      await handleClaim(respond, user.id, accounts, accountsFile, threads, dm ? user : null);
+      await handleClaim(respond, user.id, accounts, accountsFile, threads, user);
     }
 
     else if (commandName === "pull") {
       await interaction.deferReply();
       const accounts = interaction.options.getString("accounts");
       const accountsFile = interaction.options.getAttachment("accounts_file");
-      const dm = interaction.options.getBoolean("dm") || false;
-      await handlePull(respond, user.id, accounts, accountsFile, dm ? user : null, user.username);
+      await handlePull(respond, user.id, accounts, accountsFile, user, user.username);
     }
 
     else if (commandName === "wlidset") {
@@ -1095,8 +1092,7 @@ client.on("interactionCreate", async (interaction) => {
       const accounts = interaction.options.getString("accounts");
       const accountsFile = interaction.options.getAttachment("accounts_file");
       const product = interaction.options.getString("product");
-      const dm = interaction.options.getBoolean("dm") || false;
-      await handlePurchase(respond, user.id, accounts, accountsFile, product, dm ? user : null);
+      await handlePurchase(respond, user.id, accounts, accountsFile, product, user);
     }
 
     else if (commandName === "search") {
@@ -1110,8 +1106,7 @@ client.on("interactionCreate", async (interaction) => {
       const accountsFile = interaction.options.getAttachment("accounts_file");
       const newPassword = interaction.options.getString("new_password");
       const threads = interaction.options.getInteger("threads") || 5;
-      const dm = interaction.options.getBoolean("dm") || false;
-      await handleChanger(respond, user.id, accounts, accountsFile, newPassword, threads, dm ? user : null);
+      await handleChanger(respond, user.id, accounts, accountsFile, newPassword, threads, user);
     }
 
     else if (commandName === "checker") {
@@ -1119,8 +1114,7 @@ client.on("interactionCreate", async (interaction) => {
       const accounts = interaction.options.getString("accounts");
       const accountsFile = interaction.options.getAttachment("accounts_file");
       const threads = interaction.options.getInteger("threads") || 5;
-      const dm = interaction.options.getBoolean("dm") || false;
-      await handleAccountChecker(respond, user.id, accounts, accountsFile, threads, dm ? user : null);
+      await handleAccountChecker(respond, user.id, accounts, accountsFile, threads, user);
     }
 
     else if (commandName === "help") {
@@ -1133,8 +1127,7 @@ client.on("interactionCreate", async (interaction) => {
       const emailsFile = interaction.options.getAttachment("emails_file");
       const newPassword = interaction.options.getString("new_password");
       const threads = interaction.options.getInteger("threads") || 1;
-      const dm = interaction.options.getBoolean("dm") || false;
-      await handleRecover(respond, user.id, emailsRaw, emailsFile, newPassword, threads, dm ? user : null, interaction);
+      await handleRecover(respond, user.id, emailsRaw, emailsFile, newPassword, threads, user, interaction);
     }
 
     else if (commandName === "captcha") {
@@ -1179,38 +1172,32 @@ client.on("messageCreate", async (message) => {
 
   try {
     if (cmd === "check") {
-      const hasDm = args.includes("--dm");
-      const filteredArgs = args.filter(a => a !== "--dm");
-      const wlidsRaw = filteredArgs.join(" ");
+      const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
-      if (!wlidsRaw && !attachment) {
+      if (!accountsRaw && !attachment) {
         const storedCount = getWlidCount();
         const storedInfo = storedCount > 0 ? `\n\n**${storedCount} WLIDs stored** — just attach codes.txt to use them.` : "\n\nNo WLIDs stored. Use `.wlidset` first or provide WLIDs inline.";
-        return respond({ embeds: [infoEmbed("Usage", "`.check [wlid_tokens]` + attach codes.txt [--dm]\n\nIf WLIDs are stored via `.wlidset`, just attach codes.\nAdd `--dm` to receive results in DMs." + storedInfo)] });
+        return respond({ embeds: [infoEmbed("Usage", "`.check [wlid_tokens]` + attach codes.txt\n\nIf WLIDs are stored via `.wlidset`, just attach codes.\nResults are always sent to your DMs." + storedInfo)] });
       }
-      await handleCheck(respond, message.author.id, wlidsRaw, null, attachment, 10, hasDm ? message.author : null);
+      await handleCheck(respond, message.author.id, accountsRaw, null, attachment, 10, message.author);
     }
 
     else if (cmd === "claim") {
-      const hasDm = args.includes("--dm");
-      const filteredArgs = args.filter(a => a !== "--dm");
-      const accountsRaw = filteredArgs.join(" ");
+      const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
       if (!accountsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.claim <accounts>` [--dm]\nProvide email:password comma-separated or attach a `.txt` file.\nAdd `--dm` to receive results in DMs.\n\nExample:\n`.claim email@test.com:pass123 --dm`")] });
+        return respond({ embeds: [infoEmbed("Usage", "`.claim <accounts>`\nProvide email:password comma-separated or attach a `.txt` file.\nResults are always sent to your DMs.")] });
       }
-      await handleClaim(respond, message.author.id, accountsRaw, attachment, 5, hasDm ? message.author : null);
+      await handleClaim(respond, message.author.id, accountsRaw, attachment, 5, message.author);
     }
 
     else if (cmd === "pull") {
-      const hasDm = args.includes("--dm");
-      const filteredArgs = args.filter(a => a !== "--dm");
-      const accountsRaw = filteredArgs.join(" ");
+      const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
       if (!accountsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.pull <accounts>` [--dm]\nProvide email:password comma-separated or attach a `.txt` file.\nAdd `--dm` to receive results in DMs.\n\nExample:\n`.pull email@test.com:pass123 --dm`")] });
+        return respond({ embeds: [infoEmbed("Usage", "`.pull <accounts>`\nProvide email:password comma-separated or attach a `.txt` file.\nResults are always sent to your DMs.")] });
       }
-      await handlePull(respond, message.author.id, accountsRaw, attachment, hasDm ? message.author : null, message.author.username);
+      await handlePull(respond, message.author.id, accountsRaw, attachment, message.author, message.author.username);
     }
 
     else if (cmd === "wlidset") {
@@ -1270,15 +1257,13 @@ client.on("messageCreate", async (message) => {
     }
 
     else if (cmd === "purchase") {
-      const hasDm = args.includes("--dm");
-      const filteredArgs = args.filter(a => a !== "--dm");
-      const productArg = filteredArgs.pop();
-      const accountsRaw = filteredArgs.join(" ");
+      const productArg = args.pop();
+      const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
       if (!productArg && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.purchase <accounts> <product_id_or_url>` [--dm]\nProvide email:password and a product ID or Microsoft Store URL.\nAttach a .txt file for multiple accounts.\n\nExample:\n`.purchase email@test.com:pass123 9NBLGGH4PNC7`")] });
+        return respond({ embeds: [infoEmbed("Usage", "`.purchase <accounts> <product_id_or_url>`\nProvide email:password and a product ID or Microsoft Store URL.\nResults are always sent to your DMs.")] });
       }
-      await handlePurchase(respond, message.author.id, accountsRaw, attachment, productArg, hasDm ? message.author : null);
+      await handlePurchase(respond, message.author.id, accountsRaw, attachment, productArg, message.author);
     }
 
     else if (cmd === "search") {
@@ -1287,27 +1272,22 @@ client.on("messageCreate", async (message) => {
     }
 
     else if (cmd === "changer") {
-      const hasDm = args.some(a => a === "--dm" || a === "—dm" || a === "–dm");
-      const filteredArgs = args.filter(a => a !== "--dm" && a !== "—dm" && a !== "–dm");
-      // Last arg is the new password
-      const newPassword = filteredArgs.pop();
-      const accountsRaw = filteredArgs.join(" ");
+      const newPassword = args.pop();
+      const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
       if (!newPassword && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.changer <accounts> <new_password>` [--dm]\nProvide email:password accounts and the new password.\nAttach a .txt file for multiple accounts.\n\nExample:\n`.changer email@test.com:oldpass NewPass123 --dm`")] });
+        return respond({ embeds: [infoEmbed("Usage", "`.changer <accounts> <new_password>`\nProvide email:password accounts and the new password.\nResults are always sent to your DMs.")] });
       }
-      await handleChanger(respond, message.author.id, accountsRaw, attachment, newPassword, 5, hasDm ? message.author : null);
+      await handleChanger(respond, message.author.id, accountsRaw, attachment, newPassword, 5, message.author);
     }
 
     else if (cmd === "checker") {
-      const hasDm = args.some(a => a === "--dm" || a === "—dm" || a === "–dm");
-      const filteredArgs = args.filter(a => a !== "--dm" && a !== "—dm" && a !== "–dm");
-      const accountsRaw = filteredArgs.join(" ");
+      const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
       if (!accountsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.checker <accounts>` [--dm]\nProvide email:password accounts or attach a `.txt` file.\n\nExample:\n`.checker email@test.com:pass123 --dm`")] });
+        return respond({ embeds: [infoEmbed("Usage", "`.checker <accounts>`\nProvide email:password accounts or attach a `.txt` file.\nResults are always sent to your DMs.")] });
       }
-      await handleAccountChecker(respond, message.author.id, accountsRaw, attachment, 5, hasDm ? message.author : null);
+      await handleAccountChecker(respond, message.author.id, accountsRaw, attachment, 5, message.author);
     }
 
     else if (cmd === "help") {
@@ -1315,18 +1295,16 @@ client.on("messageCreate", async (message) => {
     }
 
     else if (cmd === "recover") {
-      const hasDm = args.some(a => a === "--dm" || a === "—dm" || a === "–dm");
-      const filteredArgs = args.filter(a => a !== "--dm" && a !== "—dm" && a !== "–dm");
-      const newPassword = filteredArgs.pop();
-      const emailsRaw = filteredArgs.join(" ");
+      const newPassword = args.pop();
+      const emailsRaw = args.join(" ");
       const attachment = message.attachments.first();
       if (!emailsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.recover <email(s)> <new_password>` [--dm]\nProvide email(s) or attach a `.txt` file with emails (one per line).\nThe last argument is always the new password.\n\nExamples:\n`.recover email@test.com NewPass123`\n`.recover email1@test.com,email2@test.com NewPass123`\nOr attach emails.txt and: `.recover NewPass123`")] });
+        return respond({ embeds: [infoEmbed("Usage", "`.recover <email(s)> <new_password>`\nProvide email(s) or attach a `.txt` file.\nResults are always sent to your DMs.")] });
       }
       if (!newPassword) {
         return respond({ embeds: [errorEmbed("Provide the new password as the last argument.")] });
       }
-      await handleRecover(respond, message.author.id, emailsRaw, attachment, newPassword, 1, hasDm ? message.author : null, null, message);
+      await handleRecover(respond, message.author.id, emailsRaw, attachment, newPassword, 1, message.author, null, message);
     }
 
     else if (cmd === "captcha") {

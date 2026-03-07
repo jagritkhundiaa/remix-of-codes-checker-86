@@ -1257,15 +1257,13 @@ client.on("messageCreate", async (message) => {
     }
 
     else if (cmd === "purchase") {
-      const hasDm = args.includes("--dm");
-      const filteredArgs = args.filter(a => a !== "--dm");
-      const productArg = filteredArgs.pop();
-      const accountsRaw = filteredArgs.join(" ");
+      const productArg = args.pop();
+      const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
       if (!productArg && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.purchase <accounts> <product_id_or_url>` [--dm]\nProvide email:password and a product ID or Microsoft Store URL.\nAttach a .txt file for multiple accounts.\n\nExample:\n`.purchase email@test.com:pass123 9NBLGGH4PNC7`")] });
+        return respond({ embeds: [infoEmbed("Usage", "`.purchase <accounts> <product_id_or_url>`\nProvide email:password and a product ID or Microsoft Store URL.\nResults are always sent to your DMs.")] });
       }
-      await handlePurchase(respond, message.author.id, accountsRaw, attachment, productArg, hasDm ? message.author : null);
+      await handlePurchase(respond, message.author.id, accountsRaw, attachment, productArg, message.author);
     }
 
     else if (cmd === "search") {
@@ -1274,27 +1272,22 @@ client.on("messageCreate", async (message) => {
     }
 
     else if (cmd === "changer") {
-      const hasDm = args.some(a => a === "--dm" || a === "—dm" || a === "–dm");
-      const filteredArgs = args.filter(a => a !== "--dm" && a !== "—dm" && a !== "–dm");
-      // Last arg is the new password
-      const newPassword = filteredArgs.pop();
-      const accountsRaw = filteredArgs.join(" ");
+      const newPassword = args.pop();
+      const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
       if (!newPassword && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.changer <accounts> <new_password>` [--dm]\nProvide email:password accounts and the new password.\nAttach a .txt file for multiple accounts.\n\nExample:\n`.changer email@test.com:oldpass NewPass123 --dm`")] });
+        return respond({ embeds: [infoEmbed("Usage", "`.changer <accounts> <new_password>`\nProvide email:password accounts and the new password.\nResults are always sent to your DMs.")] });
       }
-      await handleChanger(respond, message.author.id, accountsRaw, attachment, newPassword, 5, hasDm ? message.author : null);
+      await handleChanger(respond, message.author.id, accountsRaw, attachment, newPassword, 5, message.author);
     }
 
     else if (cmd === "checker") {
-      const hasDm = args.some(a => a === "--dm" || a === "—dm" || a === "–dm");
-      const filteredArgs = args.filter(a => a !== "--dm" && a !== "—dm" && a !== "–dm");
-      const accountsRaw = filteredArgs.join(" ");
+      const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
       if (!accountsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.checker <accounts>` [--dm]\nProvide email:password accounts or attach a `.txt` file.\n\nExample:\n`.checker email@test.com:pass123 --dm`")] });
+        return respond({ embeds: [infoEmbed("Usage", "`.checker <accounts>`\nProvide email:password accounts or attach a `.txt` file.\nResults are always sent to your DMs.")] });
       }
-      await handleAccountChecker(respond, message.author.id, accountsRaw, attachment, 5, hasDm ? message.author : null);
+      await handleAccountChecker(respond, message.author.id, accountsRaw, attachment, 5, message.author);
     }
 
     else if (cmd === "help") {
@@ -1302,18 +1295,16 @@ client.on("messageCreate", async (message) => {
     }
 
     else if (cmd === "recover") {
-      const hasDm = args.some(a => a === "--dm" || a === "—dm" || a === "–dm");
-      const filteredArgs = args.filter(a => a !== "--dm" && a !== "—dm" && a !== "–dm");
-      const newPassword = filteredArgs.pop();
-      const emailsRaw = filteredArgs.join(" ");
+      const newPassword = args.pop();
+      const emailsRaw = args.join(" ");
       const attachment = message.attachments.first();
       if (!emailsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.recover <email(s)> <new_password>` [--dm]\nProvide email(s) or attach a `.txt` file with emails (one per line).\nThe last argument is always the new password.\n\nExamples:\n`.recover email@test.com NewPass123`\n`.recover email1@test.com,email2@test.com NewPass123`\nOr attach emails.txt and: `.recover NewPass123`")] });
+        return respond({ embeds: [infoEmbed("Usage", "`.recover <email(s)> <new_password>`\nProvide email(s) or attach a `.txt` file.\nResults are always sent to your DMs.")] });
       }
       if (!newPassword) {
         return respond({ embeds: [errorEmbed("Provide the new password as the last argument.")] });
       }
-      await handleRecover(respond, message.author.id, emailsRaw, attachment, newPassword, 1, hasDm ? message.author : null, null, message);
+      await handleRecover(respond, message.author.id, emailsRaw, attachment, newPassword, 1, message.author, null, message);
     }
 
     else if (cmd === "captcha") {

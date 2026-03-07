@@ -282,7 +282,7 @@ async function handleClaim(respond, userId, accountsRaw, accountsFile, threads =
 
 // ── Pull handler ─────────────────────────────────────────────
 
-async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = null) {
+async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = null, username = null) {
   if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
 
   const acquire = limiter.acquire(userId, "pull");
@@ -295,6 +295,7 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
 
   const ac = new AbortController();
   activeAborts.set(userId, ac);
+  const startTime = Date.now();
 
   try {
     let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
@@ -347,6 +348,7 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
       }
     }, ac.signal);
 
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const stopped = ac.signal.aborted;
     const files = [];
     const valid = validateResults.filter((r) => r.status === "valid");
@@ -363,13 +365,17 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
     if (invalid.length > 0)
       files.push(textAttachment(invalid.map((r) => r.code), "invalid.txt"));
 
-    const embed = pullResultsEmbed(fetchResults, validateResults);
-    if (stopped) embed.setTitle("Pull Results (Stopped)");
+    const embed = pullResultsEmbed(fetchResults, validateResults, {
+      elapsed,
+      dmSent: !!dmUser,
+      username: username || undefined,
+    });
+    if (stopped) embed.setDescription(embed.data.description + "\n\n*Stopped -- partial results*");
 
     if (dmUser) {
       try {
         await dmUser.send({ embeds: [embed], files });
-        await msg.edit({ embeds: [infoEmbed("Pull Complete", "Results sent to your DMs.")], components: [] });
+        await msg.edit({ embeds: [pullResultsEmbed(fetchResults, validateResults, { elapsed, dmSent: true, username: username || undefined })], components: [] });
       } catch {
         await msg.edit({ embeds: [embed], files, components: [] });
       }

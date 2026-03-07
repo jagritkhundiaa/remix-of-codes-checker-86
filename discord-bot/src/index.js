@@ -482,7 +482,7 @@ function formatUptime(seconds) {
 // ── Purchase handler ─────────────────────────────────────────
 
 async function handlePurchase(respond, userId, accountsRaw, accountsFile, productUrl, dmUser = null) {
-  if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
+  if (!isOwner(userId)) return respond({ embeds: [ownerOnlyEmbed("Purchaser")] });
 
   const acquire = limiter.acquire(userId, "purchase");
   if (!acquire.ok) {
@@ -612,7 +612,7 @@ async function handleSearch(respond, query) {
 // ── Changer handler ──────────────────────────────────────────
 
 async function handleChanger(respond, userId, accountsRaw, accountsFile, newPassword, threads = 5, dmUser = null) {
-  if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
+  if (!isOwner(userId)) return respond({ embeds: [ownerOnlyEmbed("Changer")] });
 
   const acquire = limiter.acquire(userId, "changer");
   if (!acquire.ok) {

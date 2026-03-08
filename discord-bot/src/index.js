@@ -1337,6 +1337,7 @@ async function handleInboxAio(respond, userId, accountsRaw, accountsFile, thread
     }
 
     // Build per-service file content (new format: services = { Name: { count, subjects } })
+    const files = [];
     const serviceFiles = {};
     for (const r of hitResults) {
       for (const [svcName, svcData] of Object.entries(r.services || {})) {

@@ -735,11 +735,13 @@ async def do_inboxaio(ctx_or_inter, accounts_raw=None, accounts_file=None, threa
         bar_str = "█" * filled + "░" * (20 - filled)
 
         em = e()
+        cpm = int(done / sec * 60) if sec > 0 else 0
         block = [
             f"  Progress    [{bar_str}] {pct}%",
             f"  Processed   {done} / {total}",
             f"  Hits        {hits}",
             f"  Failed      {fails}",
+            f"  Speed       {cpm} checks/min",
             f"  Elapsed     {sec:.1f}s",
         ]
         em.description = f"```\n" + "\n".join(block) + "\n```"

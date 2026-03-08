@@ -691,7 +691,7 @@ async function pullCodes(accounts, onProgress, signal) {
   const wlids = getWlids();
   if (wlids.length === 0) {
     const validateResults = allCodes.map((c) => ({ code: c, status: "error", message: `${c} | No WLIDs stored — use .wlidset first` }));
-    return { fetchResults, prsResults, validateResults };
+    return { fetchResults, validateResults };
   }
 
   if (onProgress) onProgress("validate_start", { total: allCodes.length, fetchResults, totalPrsCodes });

@@ -559,7 +559,7 @@ async function attemptCheck(email, password) {
           const searchBody = {
             Cvid: "7ef2720e-6e59-ee2b-a217-3a4f427ab0f7",
             Scenario: { Name: "owa.react" },
-            TimeZone: "UTC",
+            TimeZone: "Egypt Standard Time",
             TextDecorations: "Off",
             EntityRequests: [{
               EntityType: "Conversation",

@@ -952,6 +952,88 @@ function inboxAioResultsEmbed({ total, hits, fails, locked, twoFA, elapsed, serv
   return embed;
 }
 
+// ── PRS (Rewards Scraper) Embeds ─────────────────────────────
+
+function prsProgressEmbed({ done, total, codesFound, category, working, failed, elapsed, latestAccount, username }) {
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  const barW = 20;
+  const filled = Math.round((pct / 100) * barW);
+  const bar = "#".repeat(filled) + "-".repeat(barW - filled);
+  const elSec = elapsed ? Math.round(elapsed / 1000) : 0;
+  const cpm = elSec > 0 ? Math.round((done / elSec) * 60) : 0;
+
+  const lines = [
+    `PRS - ${(category || "All").toUpperCase()} SCRAPER`,
+    "----------------------------",
+    "",
+    `  [${bar}] ${pct}%`,
+    `  ${pad("Processed")}${done} / ${total}`,
+    `  ${pad("Codes Found")}${codesFound || 0}`,
+    "",
+    `  ${pad("Working")}${working || 0}`,
+    `  ${pad("Failed")}${failed || 0}`,
+    `  ${pad("Speed")}${cpm} accts/min`,
+    `  ${pad("Elapsed")}${elSec}s`,
+  ];
+
+  if (latestAccount) {
+    const masked = latestAccount.replace(/(.{3}).*(@.*)/, "$1***$2");
+    lines.push(`  ${pad("Latest")}${masked}`);
+  }
+
+  const embed = header({ thumbnail: false })
+    .setColor(COLORS.INFO)
+    .setDescription(`\`\`\`\n${lines.join("\n")}\n\`\`\``);
+
+  if (username) {
+    embed.setFooter({ text: `Scraped by ${username} | ${new Date().toLocaleDateString("en-GB")} ${new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}` });
+  }
+
+  return embed;
+}
+
+function prsResultsEmbed({ total, hits, valid, failed, twoFA, codesFound, category, elapsed, categoryBreakdown, username, dmSent }) {
+  const elSec = elapsed ? Math.round(elapsed / 1000) : 0;
+  const cpm = elSec > 0 ? Math.round((total / elSec) * 60) : 0;
+
+  const block = [
+    `PRS - ${(category || "All").toUpperCase()} SCRAPER`,
+    "----------------------------",
+    "",
+    `  ${pad("Checked")}${total}`,
+    `  ${pad("With Codes")}${hits}`,
+    `  ${pad("Valid (empty)")}${valid}`,
+    `  ${pad("Failed")}${failed}`,
+  ];
+  if (twoFA > 0) block.push(`  ${pad("2FA")}${twoFA}`);
+  block.push(
+    "",
+    `  ${pad("Total Codes")}${codesFound}`,
+    `  ${pad("Speed")}${cpm} accts/min`,
+    `  ${pad("Elapsed")}${elSec}s`,
+  );
+
+  if (username) {
+    block.push("", `  Requested by ${username}`);
+  }
+
+  const embed = header()
+    .setColor(codesFound > 0 ? COLORS.SUCCESS : COLORS.ERROR)
+    .setTitle("PRS  ─  Results")
+    .setDescription(`\`\`\`\n${block.join("\n")}\n\`\`\``);
+
+  // Category breakdown
+  if (categoryBreakdown && Object.keys(categoryBreakdown).length > 0) {
+    const sorted = Object.entries(categoryBreakdown).sort((a, b) => b[1] - a[1]);
+    const catLines = sorted.map(([cat, count]) => `◈ **${cat}**: ${count} codes`);
+    embed.addFields({ name: "┃ Categories", value: catLines.join("\n"), inline: false });
+  }
+
+  if (dmSent) embed.addFields({ name: "\u200b", value: "Results sent to your DMs.", inline: false });
+
+  return embed;
+}
+
 module.exports = {
   progressEmbed,
   checkResultsEmbed,

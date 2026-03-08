@@ -658,22 +658,17 @@ async function pullCodes(accounts, onProgress, signal) {
           .catch(() => ({ results: [], allCodes: [] })),
       ]);
 
-      // Collect PRS codes — only keep Microsoft-redeemable 25-char (5x5) codes, deduplicate against GP codes
+      // Collect PRS codes — keep all codes ending with Z, deduplicate against GP codes
       const gpCodes = gpResult.codes || [];
       const gpCodeSet = new Set(gpCodes);
-      const MS_CODE_RE = /^[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}$/;
       const prsCodes = (prsResult.allCodes || [])
         .map(c => c.code)
-        .filter(c => c && MS_CODE_RE.test(c) && !isInvalidCodeFormat(c) && !gpCodeSet.has(c));
+        .filter(c => c && /Z$/i.test(c) && !gpCodeSet.has(c));
 
-      const accountPrsInfo = prsResult.allCodes || [];
-      prsResults.push({ email, codes: accountPrsInfo, status: prsResult.results?.[0]?.status || "ok" });
-      totalPrsCodes += prsCodes.length;
-
-      // Merge all unique codes
+      // Merge all unique codes silently
       const mergedCodes = [...gpCodes, ...prsCodes];
 
-      fetchResults.push({ email: gpResult.email, codes: mergedCodes, gpCodes: gpCodes.length, prsCodes: prsCodes.length, error: gpResult.error });
+      fetchResults.push({ email: gpResult.email, codes: mergedCodes, error: gpResult.error });
       allCodes.push(...mergedCodes);
 
       if (onProgress)

@@ -106,12 +106,10 @@ function pullFetchProgressEmbed(details) {
   const withCodes = details.withCodes || 0;
   const noCodes = details.noCodes || 0;
   const totalCodes = details.totalCodes || 0;
-  const gpCodes = details.gpCodes || 0;
-  const prsCodes = details.prsCodes || 0;
   const elapsed = details.startTime ? ((Date.now() - details.startTime) / 1000).toFixed(1) : "...";
 
   const lines = [
-    "Fetching Codes (GP + PRS)",
+    "Fetching Codes",
     `  [${bar}] ${pct}%`,
     "----------------------------",
     "",
@@ -125,8 +123,6 @@ function pullFetchProgressEmbed(details) {
     `  ${pad("Failed")}${failed}`,
     "",
     `  ${pad("Codes Found")}${totalCodes}`,
-    `    > Game Pass         ${gpCodes}`,
-    `    > Rewards (PRS)     ${prsCodes}`,
   ];
 
   if (details.lastAccount) {

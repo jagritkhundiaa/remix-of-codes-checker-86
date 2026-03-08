@@ -181,8 +181,6 @@ function pullLiveProgressEmbed(fetchResults, validateProgress, { username, start
     `  ${pad("Failed")}${failedAccounts.length}`,
     "",
     `  ${pad("Codes Found")}${totalCodesFetched}`,
-    `    > Game Pass         ${totalGpCodes}`,
-    `    > Rewards (PRS)     ${totalPrsCodes}`,
     `    > Working           ${valid}`,
     `    > Claimed           ${used}`,
     `    > Balance           ${balance}`,

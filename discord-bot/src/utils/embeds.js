@@ -2,7 +2,7 @@
 //  Embed builders — monochrome, clean, no emojis
 // ============================================================
 
-const { EmbedBuilder, AttachmentBuilder } = require("discord.js");
+const { EmbedBuilder, AttachmentBuilder, StringSelectMenuBuilder, ActionRowBuilder } = require("discord.js");
 const { COLORS } = require("../config");
 
 const FOOTER_TEXT = "AutizMens | TalkNeon";
@@ -82,8 +82,64 @@ function pullFetchProgressEmbed(details) {
 }
 
 /**
+ * Live structured pull progress — replaces the boring progress bar during validation
+ * Shows real-time account analysis matching the final results style
+ */
+function pullLiveProgressEmbed(fetchResults, validateProgress, { username, startTime } = {}) {
+  const totalAccounts = fetchResults.length;
+  const workingAccounts = fetchResults.filter((r) => !r.error);
+  const failedAccounts = fetchResults.filter((r) => r.error);
+  const withCodes = workingAccounts.filter((r) => r.codes.length > 0);
+  const noCodes = workingAccounts.filter((r) => r.codes.length === 0);
+  const totalCodesFetched = fetchResults.reduce((sum, r) => sum + r.codes.length, 0);
+
+  const pct = validateProgress.total === 0 ? 0 : Math.round((validateProgress.done / validateProgress.total) * 100);
+  const barLen = 20;
+  const filled = Math.round((pct / 100) * barLen);
+  const bar = "\u2588".repeat(filled) + "\u2591".repeat(barLen - filled);
+
+  const valid = validateProgress.valid || 0;
+  const used = validateProgress.used || 0;
+  const balance = validateProgress.balance || 0;
+  const expired = validateProgress.expired || 0;
+  const regionLocked = validateProgress.regionLocked || 0;
+  const invalid = validateProgress.invalid || 0;
+
+  const elapsed = startTime ? ((Date.now() - startTime) / 1000).toFixed(1) : "...";
+
+  const lines = [
+    `**Validating Codes...**`,
+    `\`${bar}\` ${pct}%`,
+    ``,
+    `  **Account Analysis:**`,
+    `- **Total Accounts:** ${totalAccounts}`,
+    `- **Working Accounts:** ${workingAccounts.length}`,
+    `  \u2514 With Codes: ${withCodes.length}`,
+    `  \u2514 No Codes: ${noCodes.length}`,
+    `- **Failed Accounts:** ${failedAccounts.length}`,
+    `- **Codes Found:** ${totalCodesFetched}`,
+    `  \u2514 Working: ${valid}`,
+    `  \u2514 Claimed: ${used}`,
+    `  \u2514 Balance: ${balance}`,
+  ];
+
+  if (expired > 0) lines.push(`  \u2514 Expired: ${expired}`);
+  if (regionLocked > 0) lines.push(`  \u2514 Region Locked: ${regionLocked}`);
+  if (invalid > 0) lines.push(`  \u2514 Invalid: ${invalid}`);
+
+  lines.push(`\n**Time:** ${elapsed}s`);
+
+  const embed = header().setColor(COLORS.INFO).setDescription(lines.join("\n"));
+
+  if (username) {
+    embed.setFooter({ text: `Pulled by ${username} | ${new Date().toLocaleDateString("en-GB")} ${new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}` });
+  }
+
+  return embed;
+}
+
+/**
  * Pull results embed — matches reference image layout exactly.
- * Structured account analysis with sub-categories, elapsed time, DM notice.
  */
 function pullResultsEmbed(fetchResults, validateResults, { elapsed, dmSent, username } = {}) {
   const totalAccounts = fetchResults.length;
@@ -120,7 +176,6 @@ function pullResultsEmbed(fetchResults, validateResults, { elapsed, dmSent, user
   if (regionLocked.length > 0) lines.push(`  \u2514 Region Locked: ${regionLocked.length}`);
   if (invalid.length > 0) lines.push(`  \u2514 Invalid: ${invalid.length}`);
 
-  // Links found (unique codes count)
   lines.push(`- **Links Found:** ${totalCodesFetched}`);
 
   if (elapsed) {
@@ -222,6 +277,32 @@ function accountCheckerResultsEmbed(results) {
     );
 }
 
+function rewardsResultsEmbed(results) {
+  const success = results.filter(r => r.success);
+  const failed = results.filter(r => !r.success);
+  const totalPoints = success.reduce((sum, r) => sum + r.balance, 0);
+
+  const lines = [
+    `**Rewards Balance Check**`,
+    ``,
+    `- **Accounts Checked:** ${results.length}`,
+    `- **Successful:** ${success.length}`,
+    `- **Failed:** ${failed.length}`,
+    ``,
+    `- **Total Points:** ${totalPoints.toLocaleString()}`,
+    `- **Average:** ${success.length > 0 ? Math.round(totalPoints / success.length).toLocaleString() : 0}`,
+  ];
+
+  if (success.length > 0) {
+    const highest = success.reduce((max, r) => r.balance > max.balance ? r : max);
+    lines.push(`- **Highest:** ${highest.balance.toLocaleString()} (${highest.email.split("@")[0]}...)`);
+  }
+
+  return header()
+    .setColor(COLORS.PRIMARY)
+    .setDescription(lines.join("\n"));
+}
+
 function errorEmbed(message) {
   return header().setColor(COLORS.ERROR).setTitle("Error").setDescription(message);
 }
@@ -268,71 +349,182 @@ function authListEmbed(entries) {
     .setDescription(lines.join("\n"));
 }
 
-function helpEmbed(prefix) {
-  const sections = [
-    "```",
-    "CHECKER",
-    `  ${prefix}check [wlids] + attach codes.txt [--dm]`,
-    "  Check codes against WLID tokens.",
-    "  Uses stored WLIDs if none provided.",
-    "",
-    "CLAIMER",
-    `  ${prefix}claim <email:pass> or attach .txt [--dm]`,
-    "  Claim WLID tokens from Microsoft accounts.",
-    "",
-    "PULLER",
-    `  ${prefix}pull <email:pass> or attach .txt [--dm]`,
-    "  Fetch codes from Game Pass accounts,",
-    "  then validate them automatically.",
-    "",
-    "PURCHASER  [Owner Only]",
-    `  ${prefix}purchase <email:pass> <product_id> [--dm]`,
-    "  Buy items from the Microsoft Store.",
-    `  ${prefix}search <query>`,
-    "  Search for products on the Microsoft Store.",
-    "",
-    "CHANGER  [Owner Only]",
-    `  ${prefix}changer <email:pass> <new_password> [--dm]`,
-    "  Change password on Microsoft accounts.",
-    `  ${prefix}checker <email:pass> or attach .txt [--dm]`,
-    "  Validate account credentials.",
-    "",
-    "RECOVERY",
-    `  ${prefix}recover <email(s)> <new_password> [--dm]`,
-    "  Recover account(s) via ACSR.",
-    `  ${prefix}captcha <solution>`,
-    "  Submit CAPTCHA solution for active recovery.",
-    "",
-    "",
-    "WLID STORAGE  [Owner]",
-    `  ${prefix}wlidset <tokens> or attach .txt`,
-    "  Replace all stored WLID tokens.",
-    "",
-    "AUTHORIZATION  [Owner]",
-    `  ${prefix}auth <@user> <duration>`,
-    `  ${prefix}deauth <@user>`,
-    `  ${prefix}authlist`,
-    "",
-    "BLACKLIST  [Owner]",
-    `  ${prefix}blacklist <@user> [reason]`,
-    `  ${prefix}unblacklist <@user>`,
-    `  ${prefix}blacklistshow`,
-    "",
-    "ADMIN  [Owner]",
-    `  ${prefix}admin  -- Admin control panel`,
-    `  ${prefix}setwebhook <url>  -- Set webhook`,
-    `  ${prefix}botstats  -- Detailed statistics`,
-    "",
-    "INFO",
-    `  ${prefix}stats   -- Bot status`,
-    `  ${prefix}help    -- This message`,
-    "```",
+// ── Help System — Category Select Menu ──────────────────────
+
+const HELP_CATEGORIES = {
+  checker: {
+    label: "Checker",
+    description: "Check codes against WLID tokens",
+    emoji: null,
+    content: (p) => [
+      `**Checker** — Validate codes against WLID tokens`,
+      ``,
+      `\`${p}check [wlids]\` + attach codes.txt`,
+      `Check codes against WLID tokens.`,
+      `Uses stored WLIDs if none provided.`,
+      ``,
+      `Results are always sent to your DMs.`,
+    ].join("\n"),
+  },
+  claimer: {
+    label: "Claimer",
+    description: "Claim WLID tokens from accounts",
+    emoji: null,
+    content: (p) => [
+      `**Claimer** — Extract WLID tokens from Microsoft accounts`,
+      ``,
+      `\`${p}claim <email:pass>\` or attach .txt`,
+      `Claim WLID tokens from Microsoft accounts.`,
+      ``,
+      `Results are always sent to your DMs.`,
+    ].join("\n"),
+  },
+  puller: {
+    label: "Puller",
+    description: "Fetch & validate Game Pass codes",
+    emoji: null,
+    content: (p) => [
+      `**Puller** — Fetch codes from Game Pass accounts`,
+      ``,
+      `\`${p}pull <email:pass>\` or attach .txt`,
+      `Fetches codes from Game Pass accounts,`,
+      `then validates them automatically.`,
+      ``,
+      `Results are always sent to your DMs.`,
+    ].join("\n"),
+  },
+  rewards: {
+    label: "Rewards",
+    description: "Check Microsoft Rewards balances",
+    emoji: null,
+    content: (p) => [
+      `**Rewards** — Check Microsoft Rewards point balances`,
+      ``,
+      `\`${p}rewards <email:pass>\` or attach .txt`,
+      `Check Rewards point balances for accounts.`,
+      `Shows balance, lifetime points, and level.`,
+      ``,
+      `Results are always sent to your DMs.`,
+    ].join("\n"),
+  },
+  purchaser: {
+    label: "Purchaser",
+    description: "Buy from Microsoft Store [Owner]",
+    emoji: null,
+    content: (p) => [
+      `**Purchaser** — Microsoft Store purchases  \`[Owner Only]\``,
+      ``,
+      `\`${p}purchase <email:pass> <product_id>\``,
+      `Buy items from the Microsoft Store.`,
+      ``,
+      `\`${p}search <query>\``,
+      `Search for products on the Microsoft Store.`,
+      ``,
+      `Results are always sent to your DMs.`,
+    ].join("\n"),
+  },
+  changer: {
+    label: "Changer",
+    description: "Change passwords & check accounts [Owner]",
+    emoji: null,
+    content: (p) => [
+      `**Changer** — Account management  \`[Owner Only]\``,
+      ``,
+      `\`${p}changer <email:pass> <new_password>\``,
+      `Change password on Microsoft accounts.`,
+      ``,
+      `\`${p}checker <email:pass>\` or attach .txt`,
+      `Validate account credentials.`,
+      ``,
+      `Results are always sent to your DMs.`,
+    ].join("\n"),
+  },
+  recovery: {
+    label: "Recovery",
+    description: "Recover accounts via ACSR",
+    emoji: null,
+    content: (p) => [
+      `**Recovery** — Account recovery via ACSR`,
+      ``,
+      `\`${p}recover <email(s)> <new_password>\``,
+      `Recover account(s) via ACSR.`,
+      ``,
+      `\`${p}captcha <solution>\``,
+      `Submit CAPTCHA solution for active recovery.`,
+      ``,
+      `Results are always sent to your DMs.`,
+    ].join("\n"),
+  },
+  admin: {
+    label: "Admin",
+    description: "Authorization, blacklist & settings [Owner]",
+    emoji: null,
+    content: (p) => [
+      `**Admin** — Bot management  \`[Owner Only]\``,
+      ``,
+      `**WLID Storage**`,
+      `\`${p}wlidset <tokens>\` or attach .txt`,
+      `Replace all stored WLID tokens.`,
+      ``,
+      `**Authorization**`,
+      `\`${p}auth <@user> <duration>\``,
+      `\`${p}deauth <@user>\``,
+      `\`${p}authlist\``,
+      ``,
+      `**Blacklist**`,
+      `\`${p}blacklist <@user> [reason]\``,
+      `\`${p}unblacklist <@user>\``,
+      `\`${p}blacklistshow\``,
+      ``,
+      `**Admin Tools**`,
+      `\`${p}admin\` — Control panel`,
+      `\`${p}setwebhook <url>\` — Set webhook`,
+      `\`${p}botstats\` — Detailed statistics`,
+      `\`${p}stats\` — Bot status`,
+    ].join("\n"),
+  },
+};
+
+function helpOverviewEmbed(prefix) {
+  const lines = [
+    `Select a category below to view commands.`,
+    `All results are sent to your DMs automatically.`,
+    ``,
+    `**Categories:**`,
+    ...Object.entries(HELP_CATEGORIES).map(([key, cat]) =>
+      `\u2022 **${cat.label}** — ${cat.description}`
+    ),
   ];
 
   return header()
     .setColor(COLORS.PRIMARY)
     .setTitle("Command Reference")
-    .setDescription(sections.join("\n"));
+    .setDescription(lines.join("\n"));
+}
+
+function helpCategoryEmbed(categoryKey, prefix) {
+  const cat = HELP_CATEGORIES[categoryKey];
+  if (!cat) return errorEmbed("Unknown category.");
+
+  return header()
+    .setColor(COLORS.PRIMARY)
+    .setTitle(`Commands — ${cat.label}`)
+    .setDescription(cat.content(prefix));
+}
+
+function helpSelectMenu() {
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId("help_category")
+      .setPlaceholder("Select a category...")
+      .addOptions(
+        Object.entries(HELP_CATEGORIES).map(([key, cat]) => ({
+          label: cat.label,
+          description: cat.description,
+          value: key,
+        }))
+      )
+  );
 }
 
 function adminPanelEmbed(stats, authCount, activeOtpSessions, activeProcesses, webhookSet) {
@@ -398,18 +590,22 @@ module.exports = {
   checkResultsEmbed,
   claimResultsEmbed,
   pullFetchProgressEmbed,
+  pullLiveProgressEmbed,
   pullResultsEmbed,
   purchaseProgressEmbed,
   purchaseResultsEmbed,
   productSearchEmbed,
   changerResultsEmbed,
   accountCheckerResultsEmbed,
+  rewardsResultsEmbed,
   errorEmbed,
   successEmbed,
   infoEmbed,
   ownerOnlyEmbed,
   authListEmbed,
-  helpEmbed,
+  helpOverviewEmbed,
+  helpCategoryEmbed,
+  helpSelectMenu,
   adminPanelEmbed,
   detailedStatsEmbed,
   textAttachment,

@@ -1223,7 +1223,15 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     else if (commandName === "help") {
-      await respond({ embeds: [helpEmbed("/")] });
+      await respond({ embeds: [helpOverviewEmbed("/")], components: [helpSelectMenu()] });
+    }
+
+    else if (commandName === "rewards") {
+      await interaction.deferReply();
+      const accounts = interaction.options.getString("accounts");
+      const accountsFile = interaction.options.getAttachment("accounts_file");
+      const threads = interaction.options.getInteger("threads") || 3;
+      await handleRewards(respond, user.id, accounts, accountsFile, threads, user);
     }
 
     else if (commandName === "recover") {

@@ -1419,17 +1419,6 @@ async def cmd_promopuller(ctx, *, raw=""):
     att = ctx.message.attachments[0] if ctx.message.attachments else None
     await do_promopuller(ctx, raw or None, att)
 
-@bot.command(name="changer")
-async def cmd_changer(ctx, new_password=None, *, raw=""):
-    if not new_password:
-        return await ctx.send(embed=e().add_field(name="", value=f"Usage: `{config.PREFIX}changer <new_password>` + attach email:pass .txt"))
-    att = ctx.message.attachments[0] if ctx.message.attachments else None
-    await do_changer(ctx, raw or None, att, new_password)
-
-@bot.command(name="rewards")
-async def cmd_rewards(ctx, *, raw=""):
-    att = ctx.message.attachments[0] if ctx.message.attachments else None
-    await do_rewards(ctx, raw or None, att)
 
 @bot.command(name="inboxaio")
 async def cmd_inboxaio(ctx, *, raw=""):

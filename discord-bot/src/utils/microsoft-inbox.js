@@ -457,8 +457,13 @@ async function attemptCheck(email, password) {
           },
           signal: AbortSignal.timeout(15000),
         });
-        const tokenJson = await tokenResp.json();
-        accessToken = tokenJson.access_token || "";
+        const tokenText = await tokenResp.text();
+        try {
+          const tokenJson = JSON.parse(tokenText);
+          accessToken = tokenJson.access_token || "";
+        } catch {
+          accessToken = parseLR(tokenText, '"access_token":"', '"') || parseLR(tokenText, "access_token=", "&");
+        }
       } catch {}
     }
 

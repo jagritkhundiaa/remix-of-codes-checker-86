@@ -15,8 +15,6 @@ from wlid_store import set_wlids, get_wlids, get_wlid_count
 from ms_claimer import claim_wlids
 from ms_code_checker import check_codes
 from ms_puller import pull_codes, pull_links
-from ms_changer import change_passwords
-from ms_rewards import check_rewards_balances
 from ms_inbox import check_inbox_accounts, get_service_count
 
 intents = discord.Intents.default()

@@ -1040,6 +1040,9 @@ async function handleRecover(respond, userId, emailsRaw, emailsFile, newPassword
   if (emails.length === 0) {
     return respond({ embeds: [errorEmbed("No emails provided. Provide email(s) or attach a `.txt` file.")] });
   }
+  if (emails.length > MAX_COMBO_LINES) {
+    return respond({ embeds: [errorEmbed(`Too many emails. Max ${MAX_COMBO_LINES} lines allowed.`)] });
+  }
 
   // Single email — original interactive flow (supports CAPTCHA)
   if (emails.length === 1) {

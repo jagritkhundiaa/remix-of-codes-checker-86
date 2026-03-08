@@ -7,6 +7,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { Agent: UndiciAgent } = require("undici");
 const { SocksProxyAgent } = require("socks-proxy-agent");
 const { HttpsProxyAgent } = require("https-proxy-agent");
 const { HttpProxyAgent } = require("http-proxy-agent");
@@ -200,18 +201,45 @@ function getProxyCount() {
 }
 
 /**
+ * Direct fetch with retry + IPv4 fallback.
+ */
+const ipv4Dispatcher = new UndiciAgent({ connect: { family: 4 } });
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function directFetchWithFallback(url, options = {}) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await fetch(url, options);
+    } catch (err) {
+      lastError = err;
+      if (attempt < 2) await sleep(250 * attempt);
+    }
+  }
+
+  try {
+    return await fetch(url, { ...options, dispatcher: ipv4Dispatcher });
+  } catch (ipv4Err) {
+    const first = lastError?.message || "unknown";
+    throw new Error(`direct fetch failed (${first}); ipv4 fallback failed (${ipv4Err.message})`);
+  }
+}
+
+/**
  * Proxied fetch — drop-in replacement for global fetch.
  * Uses a rotating proxy when proxies are enabled.
- * Falls back to direct fetch if proxies are disabled or none loaded.
+ * Falls back to direct fetch with retries when proxy fails.
  */
 async function proxiedFetch(url, options = {}) {
   if (!isProxyEnabled()) {
-    return fetch(url, options);
+    return directFetchWithFallback(url, options);
   }
 
   const proxy = getNextProxy();
   if (!proxy) {
-    return fetch(url, options);
+    return directFetchWithFallback(url, options);
   }
 
   const agent = createAgent(proxy);
@@ -225,10 +253,15 @@ async function proxiedFetch(url, options = {}) {
     });
     proxyStats.success++;
     return response;
-  } catch (err) {
+  } catch (proxyErr) {
     proxyStats.failed++;
-    console.warn(`[Proxy] Failed via ${proxy.host}:${proxy.port}: ${err.message}`);
-    return fetch(url, options);
+    console.warn(`[Proxy] Failed via ${proxy.host}:${proxy.port}: ${proxyErr.message}`);
+
+    try {
+      return await directFetchWithFallback(url, options);
+    } catch (directErr) {
+      throw new Error(`proxy fetch failed (${proxyErr.message}); direct fallback failed (${directErr.message})`);
+    }
   }
 }
 

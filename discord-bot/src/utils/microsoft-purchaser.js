@@ -106,7 +106,12 @@ async function fetchWithCookies(url, options, cookies) {
 
   while (maxRedirects > 0) {
     const headers = { ...(options.headers || {}), Cookie: cookies.toString() };
-    const response = await proxiedFetch(currentUrl, { ...options, headers, redirect: "manual" });
+    let response;
+    try {
+      response = await proxiedFetch(currentUrl, { ...options, headers, redirect: "manual" });
+    } catch (err) {
+      throw new Error(`Request failed at ${currentUrl}: ${err.message}`);
+    }
     cookies.extractFromHeaders(response.headers);
 
     const location = response.headers.get("location");
@@ -302,7 +307,8 @@ async function loginToStore(email, password) {
       email,
     };
   } catch (err) {
-    console.error(`[PURCHASER] Login EXCEPTION for ${email}:`, err.message);
+    const cause = err?.cause?.message ? ` | cause: ${err.cause.message}` : "";
+    console.error(`[PURCHASER] Login EXCEPTION for ${email}: ${err.message}${cause}`);
     return null;
   }
 }

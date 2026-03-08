@@ -346,8 +346,6 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
 
     let lastUpdate = Date.now();
     let totalCodesSoFar = 0;
-    let totalGpCodes = 0;
-    let totalPrsCodes = 0;
     let lastAccount = "";
     let lastCodes = 0;
     let lastError = null;

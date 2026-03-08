@@ -667,43 +667,4 @@ async function pullCodes(accounts, onProgress, signal) {
   return { fetchResults, validateResults };
 }
 
-/**
- * Promo-only pull pipeline: fetch links only, no validation.
- */
-async function pullPromoLinks(accounts, onProgress, signal) {
-  const parsed = accounts.map((a) => {
-    const i = a.indexOf(":");
-    return i === -1 ? { email: a, password: "" } : { email: a.substring(0, i), password: a.substring(i + 1) };
-  });
-
-  const threads = Math.min(parsed.length, 10);
-  const fetchResults = [];
-  let fetchDone = 0;
-
-  async function fetchWorker() {
-    while (true) {
-      if (signal && signal.aborted) break;
-      const idx = fetchDone++;
-      if (idx >= parsed.length) break;
-      const { email, password } = parsed[idx];
-      const result = await fetchFromAccount(email, password);
-      fetchResults.push(result);
-      if (onProgress)
-        onProgress("fetch", {
-          email,
-          codes: result.codes.length,
-          error: result.error,
-          done: fetchResults.length,
-          total: parsed.length,
-        });
-    }
-  }
-
-  fetchDone = 0;
-  const fetchWorkers = Array(Math.min(threads, parsed.length)).fill(null).map(() => fetchWorker());
-  await Promise.all(fetchWorkers);
-
-  return { fetchResults };
-}
-
-module.exports = { pullCodes, pullPromoLinks, fetchFromAccount, validateCodesWithStore };
+module.exports = { pullCodes, fetchFromAccount, validateCodesWithStore };

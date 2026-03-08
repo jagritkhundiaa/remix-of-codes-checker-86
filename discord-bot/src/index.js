@@ -12,8 +12,7 @@ const { StatsManager } = require("./utils/stats-manager");
 const { sendToWebhook } = require("./utils/webhook");
 const { checkCodes } = require("./utils/microsoft-checker");
 const { claimWlids } = require("./utils/microsoft-claimer");
-const { pullCodes, pullPromoLinks } = require("./utils/microsoft-puller");
-const { savePromosUnchecked } = require("./utils/supabase-store");
+const { pullCodes } = require("./utils/microsoft-puller");
 const { searchProducts, getProductDetails, purchaseItems } = require("./utils/microsoft-purchaser");
 const { changePasswords, checkAccounts } = require("./utils/microsoft-changer");
 const { initiateRecovery, submitCaptchaAndContinue, submitNewPassword, downloadCaptchaImage } = require("./utils/microsoft-recover");
@@ -27,8 +26,6 @@ const {
   pullFetchProgressEmbed,
   pullLiveProgressEmbed,
   pullResultsEmbed,
-  promoPullProgressEmbed,
-  promoPullResultsEmbed,
   purchaseResultsEmbed,
   purchaseProgressEmbed,
   productSearchEmbed,
@@ -414,28 +411,6 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
     const expired = validateResults.filter((r) => r.status === "expired");
     const invalid = validateResults.filter((r) => r.status === "invalid" || r.status === "error");
 
-    // Collect all raw promo links fetched from accounts
-    const allPromoLinks = fetchResults.flatMap((r) =>
-      r.codes.map((code) => code)
-    );
-
-    // Save promo links to promos_unchecked database
-    if (allPromoLinks.length > 0) {
-      const linksToSave = fetchResults.flatMap((r) =>
-        r.codes.map((code) => ({
-          code,
-          source_email: r.email,
-          status: "unchecked",
-        }))
-      );
-      savePromosUnchecked(linksToSave, { pulledBy: username, discordUserId: userId }).catch(() => {});
-    }
-
-    // Add promo links as txt file
-    if (allPromoLinks.length > 0) {
-      files.push(textAttachment(allPromoLinks, "promo_links.txt"));
-    }
-
     if (valid.length > 0)
       files.push(textAttachment(valid.map((r) => (r.title ? `${r.code} | ${r.title}` : r.code)), "valid.txt"));
     if (used.length > 0)
@@ -456,147 +431,6 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
       try {
         await dmUser.send({ embeds: [embed], files });
         await msg.edit({ embeds: [pullResultsEmbed(fetchResults, validateResults, { elapsed, dmSent: true, username: username || undefined })], components: [] });
-      } catch {
-        await msg.edit({ embeds: [embed], files, components: [] });
-      }
-    } else {
-      await msg.edit({ embeds: [embed], files, components: [] });
-    }
-  } catch (err) {
-    await respond({ embeds: [errorEmbed(`Unexpected error: ${err.message}`)] });
-  } finally {
-    activeAborts.delete(userId);
-    limiter.release(userId);
-  }
-}
-
-// ── Promo Puller handler ─────────────────────────────────────
-
-async function handlePromoPull(respond, userId, accountsRaw, accountsFile, dmUser = null, username = null) {
-  if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
-
-  const acquire = limiter.acquire(userId, "promopuller");
-  if (!acquire.ok) {
-    const reason = acquire.reason === "busy"
-      ? "You already have a command running. Wait for it to finish."
-      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
-    return respond({ embeds: [errorEmbed(reason)] });
-  }
-
-  const ac = new AbortController();
-  activeAborts.set(userId, ac);
-  const startTime = Date.now();
-
-  try {
-    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
-    if (accountsFile) {
-      const lines = await fetchAttachmentLines(accountsFile);
-      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
-    }
-
-    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
-
-    const msg = await respond({
-      embeds: [promoPullProgressEmbed({ done: 0, total: accounts.length, totalLinks: 0, working: 0, failed: 0, withLinks: 0, noLinks: 0, startTime, username })],
-      components: [stopButton(userId)],
-      fetchReply: true,
-    });
-
-    let lastUpdate = Date.now();
-    let totalLinksSoFar = 0;
-    let lastAccount = "";
-    let lastLinks = 0;
-    let lastError = null;
-    let fetchWorking = 0;
-    let fetchFailed = 0;
-    let fetchWithLinks = 0;
-    let fetchNoLinks = 0;
-
-    const { fetchResults } = await pullPromoLinks(accounts, (phase, detail) => {
-      if (phase !== "fetch") return;
-      const now = Date.now();
-
-      totalLinksSoFar += detail.codes;
-      lastAccount = detail.email;
-      lastLinks = detail.codes;
-      lastError = detail.error;
-
-      if (detail.error) {
-        fetchFailed++;
-      } else {
-        fetchWorking++;
-        if (detail.codes > 0) fetchWithLinks++;
-        else fetchNoLinks++;
-      }
-
-      if (now - lastUpdate > 2000) {
-        lastUpdate = now;
-        updateProgress(msg, promoPullProgressEmbed({
-          done: detail.done,
-          total: detail.total,
-          totalLinks: totalLinksSoFar,
-          working: fetchWorking,
-          failed: fetchFailed,
-          withLinks: fetchWithLinks,
-          noLinks: fetchNoLinks,
-          lastAccount,
-          lastLinks,
-          lastError,
-          startTime,
-          username,
-        }), userId);
-      }
-    }, ac.signal);
-
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    const stopped = ac.signal.aborted;
-    const files = [];
-
-    // Collect all promo links
-    const allPromoLinks = fetchResults.flatMap((r) => r.codes);
-
-    // Save to database
-    if (allPromoLinks.length > 0) {
-      const linksToSave = fetchResults.flatMap((r) =>
-        r.codes.map((code) => ({
-          code,
-          source_email: r.email,
-          status: "unchecked",
-        }))
-      );
-      savePromosUnchecked(linksToSave, { pulledBy: username, discordUserId: userId }).catch(() => {});
-    }
-
-    // Add promo links as txt file
-    if (allPromoLinks.length > 0) {
-      files.push(textAttachment(allPromoLinks, "promo_links.txt"));
-    }
-
-    // Add per-account breakdown
-    const accountBreakdown = fetchResults
-      .filter((r) => !r.error && r.codes.length > 0)
-      .map((r) => `${r.email} | ${r.codes.length} links`);
-    if (accountBreakdown.length > 0) {
-      files.push(textAttachment(accountBreakdown, "account_summary.txt"));
-    }
-
-    // Add failed accounts
-    const failedAccounts = fetchResults.filter((r) => r.error);
-    if (failedAccounts.length > 0) {
-      files.push(textAttachment(failedAccounts.map((r) => `${r.email} | ${r.error}`), "failed.txt"));
-    }
-
-    const embed = promoPullResultsEmbed(fetchResults, {
-      elapsed,
-      dmSent: !!dmUser,
-      username: username || undefined,
-    });
-    if (stopped) embed.setDescription(embed.data.description + "\n\n*Stopped -- partial results*");
-
-    if (dmUser) {
-      try {
-        await dmUser.send({ embeds: [embed], files });
-        await msg.edit({ embeds: [promoPullResultsEmbed(fetchResults, { elapsed, dmSent: true, username: username || undefined })], components: [] });
       } catch {
         await msg.edit({ embeds: [embed], files, components: [] });
       }
@@ -1357,13 +1191,6 @@ client.on("interactionCreate", async (interaction) => {
       await handlePull(respond, user.id, accounts, accountsFile, user, user.username);
     }
 
-    else if (commandName === "promopuller") {
-      await interaction.deferReply();
-      const accounts = interaction.options.getString("accounts");
-      const accountsFile = interaction.options.getAttachment("accounts_file");
-      await handlePromoPull(respond, user.id, accounts, accountsFile, user, user.username);
-    }
-
     else if (commandName === "wlidset") {
       const wlids = interaction.options.getString("wlids");
       const wlidsFile = interaction.options.getAttachment("wlids_file");
@@ -1527,15 +1354,6 @@ client.on("messageCreate", async (message) => {
         return respond({ embeds: [infoEmbed("Usage", "`.pull <accounts>`\nProvide email:password comma-separated or attach a `.txt` file.\nResults are always sent to your DMs.")] });
       }
       await handlePull(respond, message.author.id, accountsRaw, attachment, message.author, message.author.username);
-    }
-
-    else if (cmd === "promopuller") {
-      const accountsRaw = args.join(" ");
-      const attachment = message.attachments.first();
-      if (!accountsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.promopuller <accounts>`\nProvide email:password comma-separated or attach a `.txt` file.\nPulls only promo links (no code validation).\nResults are always sent to your DMs.")] });
-      }
-      await handlePromoPull(respond, message.author.id, accountsRaw, attachment, message.author, message.author.username);
     }
 
     else if (cmd === "wlidset") {

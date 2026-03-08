@@ -1404,7 +1404,16 @@ client.on("messageCreate", async (message) => {
     }
 
     else if (cmd === "help") {
-      return respond({ embeds: [helpEmbed(config.PREFIX)] });
+      return respond({ embeds: [helpOverviewEmbed(config.PREFIX)], components: [helpSelectMenu()] });
+    }
+
+    else if (cmd === "rewards") {
+      const accountsRaw = args.join(" ");
+      const attachment = message.attachments.first();
+      if (!accountsRaw && !attachment) {
+        return respond({ embeds: [infoEmbed("Usage", "`.rewards <accounts>`\nProvide email:password or attach a `.txt` file.\nResults are always sent to your DMs.")] });
+      }
+      await handleRewards(respond, message.author.id, accountsRaw, attachment, 3, message.author);
     }
 
     else if (cmd === "recover") {

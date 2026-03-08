@@ -129,7 +129,7 @@ async function processWithWorkerPool(items, concurrency, fn, onProgress, signal)
       }
       completedCount++;
       if (onProgress && completedCount % 10 === 0) {
-        onProgress(completedCount, items.length);
+        onProgress(completedCount, items.length, results[index]);
       }
     }
   }

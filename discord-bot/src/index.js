@@ -322,6 +322,9 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
     let lastAccount = "";
     let lastCodes = 0;
     let lastError = null;
+    let fetchResultsRef = [];
+    let validateCounts = {};
+    const startTime = Date.now();
 
     const { fetchResults, validateResults } = await pullCodes(accounts, (phase, detail) => {
       const now = Date.now();

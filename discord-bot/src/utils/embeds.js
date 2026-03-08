@@ -106,12 +106,10 @@ function pullFetchProgressEmbed(details) {
   const withCodes = details.withCodes || 0;
   const noCodes = details.noCodes || 0;
   const totalCodes = details.totalCodes || 0;
-  const gpCodes = details.gpCodes || 0;
-  const prsCodes = details.prsCodes || 0;
   const elapsed = details.startTime ? ((Date.now() - details.startTime) / 1000).toFixed(1) : "...";
 
   const lines = [
-    "Fetching Codes (GP + PRS)",
+    "Fetching Codes",
     `  [${bar}] ${pct}%`,
     "----------------------------",
     "",
@@ -125,8 +123,6 @@ function pullFetchProgressEmbed(details) {
     `  ${pad("Failed")}${failed}`,
     "",
     `  ${pad("Codes Found")}${totalCodes}`,
-    `    > Game Pass         ${gpCodes}`,
-    `    > Rewards (PRS)     ${prsCodes}`,
   ];
 
   if (details.lastAccount) {
@@ -156,8 +152,6 @@ function pullLiveProgressEmbed(fetchResults, validateProgress, { username, start
   const withCodes = workingAccounts.filter((r) => r.codes.length > 0);
   const noCodes = workingAccounts.filter((r) => r.codes.length === 0);
   const totalCodesFetched = fetchResults.reduce((sum, r) => sum + r.codes.length, 0);
-  const totalGpCodes = fetchResults.reduce((sum, r) => sum + (r.gpCodes || 0), 0);
-  const totalPrsCodes = fetchResults.reduce((sum, r) => sum + (r.prsCodes || 0), 0);
 
   const pct = validateProgress.total === 0 ? 0 : Math.round((validateProgress.done / validateProgress.total) * 100);
   const barLen = 20;
@@ -187,8 +181,6 @@ function pullLiveProgressEmbed(fetchResults, validateProgress, { username, start
     `  ${pad("Failed")}${failedAccounts.length}`,
     "",
     `  ${pad("Codes Found")}${totalCodesFetched}`,
-    `    > Game Pass         ${totalGpCodes}`,
-    `    > Rewards (PRS)     ${totalPrsCodes}`,
     `    > Working           ${valid}`,
     `    > Claimed           ${used}`,
     `    > Balance           ${balance}`,
@@ -218,8 +210,6 @@ function pullResultsEmbed(fetchResults, validateResults, { elapsed, dmSent, user
   const withCodes = workingAccounts.filter((r) => r.codes.length > 0);
   const noCodes = workingAccounts.filter((r) => r.codes.length === 0);
   const totalCodesFetched = fetchResults.reduce((sum, r) => sum + r.codes.length, 0);
-  const totalGpCodes = fetchResults.reduce((sum, r) => sum + (r.gpCodes || 0), 0);
-  const totalPrsCodes = fetchResults.reduce((sum, r) => sum + (r.prsCodes || 0), 0);
 
   const valid = validateResults.filter((r) => r.status === "valid");
   const used = validateResults.filter((r) => r.status === "used" || r.status === "REDEEMED");
@@ -241,8 +231,6 @@ function pullResultsEmbed(fetchResults, validateResults, { elapsed, dmSent, user
     `  ${pad("Failed")}${failedAccounts.length}`,
     "",
     `  ${pad("Codes Found")}${totalCodesFetched}`,
-    `    > Game Pass         ${totalGpCodes}`,
-    `    > Rewards (PRS)     ${totalPrsCodes}`,
     `    > Working           ${valid.length}`,
     `    > Claimed           ${used.length}`,
     `    > Balance           ${balance.length}`,

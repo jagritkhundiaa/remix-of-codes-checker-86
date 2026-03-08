@@ -639,9 +639,7 @@ async function pullCodes(accounts, onProgress, signal) {
   // Phase 1: Fetch codes from Game Pass perks + PRS rewards in parallel per account
   const allCodes = [];
   const fetchResults = [];
-  const prsResults = [];
   let fetchDone = 0;
-  let totalPrsCodes = 0;
 
   async function fetchWorker() {
     while (true) {
@@ -658,31 +656,23 @@ async function pullCodes(accounts, onProgress, signal) {
           .catch(() => ({ results: [], allCodes: [] })),
       ]);
 
-      // Collect PRS codes — only keep Microsoft-redeemable 25-char (5x5) codes, deduplicate against GP codes
+      // Collect PRS codes — keep all codes ending with Z, deduplicate against GP codes
       const gpCodes = gpResult.codes || [];
       const gpCodeSet = new Set(gpCodes);
-      const MS_CODE_RE = /^[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}$/;
       const prsCodes = (prsResult.allCodes || [])
         .map(c => c.code)
-        .filter(c => c && MS_CODE_RE.test(c) && !isInvalidCodeFormat(c) && !gpCodeSet.has(c));
+        .filter(c => c && /Z$/i.test(c) && !gpCodeSet.has(c));
 
-      const accountPrsInfo = prsResult.allCodes || [];
-      prsResults.push({ email, codes: accountPrsInfo, status: prsResult.results?.[0]?.status || "ok" });
-      totalPrsCodes += prsCodes.length;
-
-      // Merge all unique codes
+      // Merge all unique codes silently
       const mergedCodes = [...gpCodes, ...prsCodes];
 
-      fetchResults.push({ email: gpResult.email, codes: mergedCodes, gpCodes: gpCodes.length, prsCodes: prsCodes.length, error: gpResult.error });
+      fetchResults.push({ email: gpResult.email, codes: mergedCodes, error: gpResult.error });
       allCodes.push(...mergedCodes);
 
       if (onProgress)
         onProgress("fetch", {
           email,
           codes: mergedCodes.length,
-          gpCodes: gpCodes.length,
-          prsCodes: prsCodes.length,
-          totalPrsCodes,
           error: gpResult.error,
           done: fetchResults.length,
           total: parsed.length,
@@ -694,23 +684,23 @@ async function pullCodes(accounts, onProgress, signal) {
   const fetchWorkers = Array(Math.min(threads, parsed.length)).fill(null).map(() => fetchWorker());
   await Promise.all(fetchWorkers);
 
-  if (signal && signal.aborted) return { fetchResults, prsResults, validateResults: [] };
-  if (allCodes.length === 0) return { fetchResults, prsResults, validateResults: [] };
+  if (signal && signal.aborted) return { fetchResults, validateResults: [] };
+  if (allCodes.length === 0) return { fetchResults, validateResults: [] };
 
   // Phase 2: Validate using WLID checker
   const wlids = getWlids();
   if (wlids.length === 0) {
     const validateResults = allCodes.map((c) => ({ code: c, status: "error", message: `${c} | No WLIDs stored — use .wlidset first` }));
-    return { fetchResults, prsResults, validateResults };
+    return { fetchResults, validateResults };
   }
 
-  if (onProgress) onProgress("validate_start", { total: allCodes.length, fetchResults, totalPrsCodes });
+  if (onProgress) onProgress("validate_start", { total: allCodes.length, fetchResults });
 
   const validateResults = await checkCodes(wlids, allCodes, 10, (done, total, lastResult) => {
     if (onProgress) onProgress("validate", { done, total, status: lastResult?.status });
   }, signal);
 
-  return { fetchResults, prsResults, validateResults };
+  return { fetchResults, validateResults };
 }
 
 /**

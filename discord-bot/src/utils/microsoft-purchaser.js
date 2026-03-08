@@ -2,76 +2,22 @@
 //  Microsoft Store Purchaser
 //  Logs into Microsoft Store, searches for products, and
 //  completes purchases using account balance or payment methods.
-//  Uses the same hardened login flow as the WLID claimer.
+//  Uses the exact same ppsecure login flow as the puller.
 // ============================================================
 
 const crypto = require("crypto");
 const { proxiedFetch } = require("./proxy-manager");
 
-// ── Hardened CookieJar (deduplication, proper parsing) ───────
-
-class CookieJar {
-  constructor() { this.cookies = new Map(); }
-
-  extractFromHeaders(headers) {
-    const raw = headers.raw?.()?.["set-cookie"];
-    if (raw && Array.isArray(raw)) {
-      for (const c of raw) this._parse(c);
-      return;
-    }
-    const sc = headers.get("set-cookie");
-    if (sc) {
-      const parts = sc.split(/,(?=\s*[^;,]+=[^;,]+)/);
-      for (const c of parts) this._parse(c);
-    }
-  }
-
-  _parse(str) {
-    const parts = str.split(";")[0].trim();
-    const eq = parts.indexOf("=");
-    if (eq > 0) {
-      const name = parts.substring(0, eq).trim();
-      const value = parts.substring(eq + 1).trim();
-      if (name && value) this.cookies.set(name, value);
-    }
-  }
-
-  toString() {
-    return Array.from(this.cookies.entries()).map(([k, v]) => `${k}=${v}`).join("; ");
-  }
-
-  get(name) { return this.cookies.get(name); }
-}
-
 // ── Helpers ──────────────────────────────────────────────────
-
-function decodeJsonString(text) {
-  try { return JSON.parse(`"${text}"`); } catch { return text; }
-}
-
-function extractPattern(text, pattern) {
-  const match = pattern.exec(text);
-  return match ? match[1] : null;
-}
-
-function extractAllMatches(text, pattern) {
-  const matches = [];
-  const regex = new RegExp(pattern.source, pattern.flags);
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    if (match[1] && match[2]) matches.push([match[1], match[2]]);
-  }
-  return matches;
-}
-
-// ── Session fetch with redirect handling ─────────────────────
 
 const DEFAULT_HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 Edg/142.0.0.0",
   Accept:
-    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
   "Accept-Language": "en-US,en;q=0.9",
+  Referer: "https://account.microsoft.com/",
+  Origin: "https://account.microsoft.com",
   "Sec-Fetch-Dest": "document",
   "Sec-Fetch-Mode": "navigate",
   "Sec-Fetch-Site": "same-origin",
@@ -87,206 +33,112 @@ const TOKEN_HEADERS = {
   Pragma: "no-cache",
 };
 
-const PATTERNS = {
-  sftTag: /value=\\?"([^"\\]+)\\?"/s,
-  urlPost: /"urlPost":"([^"]+)"/s,
-  urlPostAlt: /urlPost:'([^']+)'/s,
-  urlGoToAad: /urlGoToAADError":"([^"]+)"/,
-  sftToken: /"sFT":"([^"]+)"/,
-  formAction: /<form[^>]*action="([^"]+)"/,
-  hiddenInputs: /<input[^>]+type="hidden"[^>]+name="([^"]+)"[^>]+value="([^"]*)"/g,
-  redirectUrl: /ucis\.RedirectUrl\s*=\s*'([^']+)'/,
-  replaceUrl: /replace\("([^"]+)"\)/,
-  formInputs: /<input[^>]+name="([^"]+)"[^>]+value="([^"]*)"/g,
-};
-
-async function fetchWithCookies(url, options, cookies) {
-  let currentUrl = url;
-  let maxRedirects = 15;
-
-  while (maxRedirects > 0) {
-    const headers = { ...(options.headers || {}), Cookie: cookies.toString() };
-    let response;
-    try {
-      response = await proxiedFetch(currentUrl, { ...options, headers, redirect: "manual" });
-    } catch (err) {
-      throw new Error(`Request failed at ${currentUrl}: ${err.message}`);
-    }
-    cookies.extractFromHeaders(response.headers);
-
-    const location = response.headers.get("location");
-    if (response.status >= 300 && response.status < 400 && location) {
-      if (location.startsWith("/")) {
-        const u = new URL(currentUrl);
-        currentUrl = `${u.origin}${location}`;
-      } else if (!location.startsWith("http")) {
-        const u = new URL(currentUrl);
-        currentUrl = `${u.origin}/${location}`;
-      } else {
-        currentUrl = location;
-      }
-      maxRedirects--;
-      options = { ...options, method: "GET", body: undefined };
-      continue;
-    }
-
-    const text = await response.text();
-    return { response, text, finalUrl: currentUrl };
-  }
-  throw new Error("Too many redirects");
-}
-
-// ── Hardened Microsoft Store Login (same as claimer) ─────────
+// ── Login — exact same as puller (ppsecure/post.srf) ────────
 
 async function loginToStore(email, password) {
-  const cookies = new CookieJar();
+  let cookieJar = "";
+
+  function extractCookies(res) {
+    const sc = res.headers.getSetCookie?.() || [];
+    for (const c of sc) {
+      const parts = c.split(";")[0].trim();
+      if (parts.includes("=")) cookieJar += "; " + parts;
+    }
+  }
+
+  async function storeGet(url) {
+    const res = await proxiedFetch(url, {
+      headers: { ...DEFAULT_HEADERS, Cookie: cookieJar },
+      redirect: "follow",
+    });
+    extractCookies(res);
+    return { res, text: await res.text() };
+  }
+
+  async function storePost(url, body, extraHeaders = {}) {
+    const res = await proxiedFetch(url, {
+      method: "POST",
+      headers: { ...DEFAULT_HEADERS, Cookie: cookieJar, ...extraHeaders },
+      body,
+      redirect: "follow",
+    });
+    extractCookies(res);
+    return { res, text: await res.text() };
+  }
 
   try {
-    // Step 1: Navigate to billing/redeem (triggers full auth flow)
-    console.log(`[PURCHASER] Step 1: Starting auth flow for ${email}`);
-    let result = await fetchWithCookies(
-      "https://account.microsoft.com/billing/redeem",
-      { method: "GET", headers: { ...DEFAULT_HEADERS, Referer: "https://account.microsoft.com/" } },
-      cookies
+    // Step 1: Login via ppsecure — exact same as puller
+    console.log(`[PURCHASER] Step 1: ppsecure login for ${email}`);
+    const bk = Math.floor(Date.now() / 1000);
+    const loginUrl = `https://login.live.com/ppsecure/post.srf?username=${encodeURIComponent(email)}&client_id=81feaced-5ddd-41e7-8bef-3e20a2689bb7&contextid=833A37B454306173&opid=81A1AC2B0BEB4ABA&bk=${bk}&uaid=f8aac2614ca54994b0bb9621af361fe6&pid=15216&prompt=none`;
+
+    const { text: loginText } = await storePost(
+      loginUrl,
+      new URLSearchParams({
+        login: email,
+        loginfmt: email,
+        passwd: password,
+        PPFT: "-DmNqKIwViyNLVW!ndu48B52hWo3*dmmh3IYETDXnVvQdWK!9sxjI48z4IX*vHf5Gl*FYol2kesrvhsuunUYDLekZOg8UW8V4cugeNYzI1wLpI7wHWnu9CLiqRiISqQ2jS1kLHkeekbWTFtKb2l0J7k3nmQ3u811SxsV1e4l8WfyX8Pt8!pgnQ1bNLoptSPmVE45tyzHdttjDZeiMvu6aV0NrFLHYroFsVS581ZI*C8z27!K5I8nESfTU!YxntGN1RQ$$",
+      }).toString(),
+      { "Content-Type": "application/x-www-form-urlencoded" }
     );
-    let text = result.text;
 
-    // Step 2: Extract redirect URL
-    const rurlMatch = extractPattern(text, PATTERNS.urlPost);
-    if (!rurlMatch) {
-      console.log(`[PURCHASER] Could not extract redirect URL for ${email}`);
-      return null;
-    }
-    const rurl = "https://login.microsoftonline.com" + decodeJsonString(rurlMatch);
-    result = await fetchWithCookies(rurl, { method: "GET", headers: { ...DEFAULT_HEADERS, Referer: "https://account.microsoft.com/" } }, cookies);
-    text = result.text;
-
-    // Step 3: Extract AAD URL and inject username hint
-    const furlMatch = extractPattern(text, PATTERNS.urlGoToAad);
-    if (!furlMatch) {
-      console.log(`[PURCHASER] Could not extract AAD URL for ${email}`);
-      return null;
-    }
-    let furl = decodeJsonString(furlMatch);
-    furl = furl.replace("&jshs=0", `&jshs=2&jsh=&jshp=&username=${encodeURIComponent(email)}&login_hint=${encodeURIComponent(email)}`);
-
-    // Step 4: Fetch login page, extract PPFT and urlPost
-    console.log(`[PURCHASER] Step 4: Fetching login page for ${email}`);
-    result = await fetchWithCookies(furl, { method: "GET", headers: { ...DEFAULT_HEADERS, Referer: "https://login.microsoftonline.com/" } }, cookies);
-    text = result.text;
-
-    let sftTag = extractPattern(text, PATTERNS.sftTag);
-    if (!sftTag) sftTag = extractPattern(text.replace(/\\/g, ""), PATTERNS.sftTag);
-    if (!sftTag) { const m = text.match(/name="PPFT"[^>]+value="([^"]+)"/); if (m) sftTag = m[1]; }
-    if (!sftTag) { const m = text.match(/value="([^"]+)"[^>]+name="PPFT"/); if (m) sftTag = m[1]; }
-    if (!sftTag) {
-      console.log(`[PURCHASER] Could not extract sFT tag for ${email}`);
-      return null;
-    }
-
-    let urlPost = extractPattern(text, PATTERNS.urlPost);
-    if (!urlPost) urlPost = extractPattern(text, PATTERNS.urlPostAlt);
-    if (!urlPost) {
-      console.log(`[PURCHASER] Could not extract urlPost for ${email}`);
-      return null;
-    }
-
-    // Step 5: Submit credentials
-    console.log(`[PURCHASER] Step 5: Submitting credentials for ${email}`);
-    const loginData = new URLSearchParams({ login: email, loginfmt: email, passwd: password, PPFT: sftTag });
-    result = await fetchWithCookies(urlPost, {
-      method: "POST",
-      headers: { ...DEFAULT_HEADERS, "Content-Type": "application/x-www-form-urlencoded", Referer: furl, Origin: "https://login.live.com" },
-      body: loginData.toString(),
-    }, cookies);
-    let loginRequest = result.text.replace(/\\/g, "");
-
-    // Check for bad credentials
-    if (loginRequest.includes("Your account or password is incorrect") || loginRequest.includes("sErrTxt")) {
-      console.log(`[PURCHASER] Bad credentials for ${email}`);
-      return null;
-    }
-
-    // Check for 2FA
-    if (loginRequest.includes("identity/confirm") || loginRequest.includes("Additional security verification") || loginRequest.includes("Enter code")) {
-      console.log(`[PURCHASER] 2FA required for ${email}`);
-      return null;
-    }
-
-    // Step 6: Handle privacy notice / intermediate pages
-    let ppftMatch = extractPattern(loginRequest, PATTERNS.sftToken);
-    if (!ppftMatch) {
-      const actionUrl = extractPattern(loginRequest, PATTERNS.formAction);
-      if (actionUrl && actionUrl.includes("privacynotice")) {
-        console.log(`[PURCHASER] Handling privacy notice for ${email}`);
-        const inputMatches = extractAllMatches(loginRequest, PATTERNS.hiddenInputs);
-        if (inputMatches.length > 0) {
-          const formData = new URLSearchParams();
-          for (const [name, value] of inputMatches) formData.append(name, value);
-          result = await fetchWithCookies(actionUrl, {
-            method: "POST", headers: { ...DEFAULT_HEADERS, "Content-Type": "application/x-www-form-urlencoded" }, body: formData.toString(),
-          }, cookies);
-          const redirectUrlMatch = extractPattern(result.text, PATTERNS.redirectUrl);
-          if (redirectUrlMatch) {
-            const redirectUrl = redirectUrlMatch.replace(/u0026/g, "&").replace(/\\&/g, "&");
-            result = await fetchWithCookies(redirectUrl, { method: "GET", headers: DEFAULT_HEADERS }, cookies);
-            loginRequest = result.text.replace(/\\/g, "");
-          }
-        }
+    // Step 2: Extract replace() redirect
+    const cleaned = loginText.replace(/\\/g, "");
+    const reurlMatch = cleaned.match(/replace\("([^"]+)"/);
+    if (!reurlMatch) {
+      // Check for bad creds
+      if (cleaned.includes("sErrTxt") || cleaned.includes("account or password is incorrect")) {
+        console.log(`[PURCHASER] Bad credentials for ${email}`);
+      } else {
+        console.log(`[PURCHASER] No redirect URL found for ${email}`);
       }
-      ppftMatch = extractPattern(loginRequest, PATTERNS.sftToken);
-    }
-    if (!ppftMatch) {
-      console.log(`[PURCHASER] Could not extract second sFT token for ${email}`);
       return null;
     }
 
-    // Step 7: Final login POST (stay signed in)
-    const lurlMatch = extractPattern(loginRequest, PATTERNS.urlPost);
-    if (!lurlMatch) {
-      console.log(`[PURCHASER] Could not extract final login URL for ${email}`);
+    console.log(`[PURCHASER] Step 2: Following redirect for ${email}`);
+    const { text: reresp } = await storeGet(reurlMatch[1]);
+
+    // Step 3: Submit hidden form (auto-post)
+    const actionMatch = reresp.match(/<form.*?action="(.*?)".*?>/);
+    if (!actionMatch) {
+      console.log(`[PURCHASER] No form action found for ${email}`);
       return null;
     }
-    const finalLoginData = new URLSearchParams({ LoginOptions: "1", type: "28", ctx: "", hpgrequestid: "", PPFT: ppftMatch, canary: "" });
-    result = await fetchWithCookies(lurlMatch, {
-      method: "POST", headers: { ...DEFAULT_HEADERS, "Content-Type": "application/x-www-form-urlencoded" }, body: finalLoginData.toString(),
-    }, cookies);
-    const finishText = result.text;
 
-    // Step 8: Handle replace() redirect
-    const reurlMatch = extractPattern(finishText, PATTERNS.replaceUrl);
-    let reresp = finishText;
-    if (reurlMatch) {
-      result = await fetchWithCookies(reurlMatch, { method: "GET", headers: { ...DEFAULT_HEADERS, Referer: "https://login.live.com/" } }, cookies);
-      reresp = result.text;
-    }
+    const inputMatches = [...reresp.matchAll(/<input.*?name="(.*?)".*?value="(.*?)".*?>/g)];
+    const formData = new URLSearchParams();
+    for (const m of inputMatches) formData.append(m[1], m[2]);
 
-    // Step 9: Handle final redirect form (auto-submit)
-    const finalActionUrl = extractPattern(reresp, PATTERNS.formAction);
-    if (finalActionUrl && !finalActionUrl.includes("javascript")) {
-      let finalInputMatches = extractAllMatches(reresp, PATTERNS.formInputs);
-      if (finalInputMatches.length === 0) {
-        const altMatches = [];
-        const regex = /<input[^>]+value="([^"]*)"[^>]+name="([^"]+)"/g;
-        let match;
-        while ((match = regex.exec(reresp)) !== null) altMatches.push([match[2], match[1]]);
-        finalInputMatches = altMatches;
-      }
-      if (finalInputMatches.length > 0) {
-        const finalFormData = new URLSearchParams();
-        for (const [name, value] of finalInputMatches) finalFormData.append(name, value);
-        result = await fetchWithCookies(finalActionUrl, {
-          method: "POST", headers: { ...DEFAULT_HEADERS, "Content-Type": "application/x-www-form-urlencoded" }, body: finalFormData.toString(),
-        }, cookies);
-      }
-    }
-
-    // Step 10: Acquire store auth token
-    console.log(`[PURCHASER] Step 10: Acquiring store token for ${email}`);
-    const tokenResponse = await proxiedFetch("https://account.microsoft.com/auth/acquire-onbehalf-of-token?scopes=MSComServiceMBISSL", {
-      method: "GET",
-      headers: { ...TOKEN_HEADERS, "User-Agent": DEFAULT_HEADERS["User-Agent"], Referer: "https://account.microsoft.com/billing/redeem", Cookie: cookies.toString() },
+    console.log(`[PURCHASER] Step 3: Submitting auth form for ${email}`);
+    await storePost(actionMatch[1], formData.toString(), {
+      "Content-Type": "application/x-www-form-urlencoded",
     });
+
+    // Step 4: Acquire store auth token
+    console.log(`[PURCHASER] Step 4: Acquiring store token for ${email}`);
+
+    // Touch buynow endpoint first — same as puller
+    await proxiedFetch("https://buynowui.production.store-web.dynamics.com/akam/13/79883e11", {
+      headers: { ...DEFAULT_HEADERS, Cookie: cookieJar },
+    }).catch(() => {});
+
+    const tokenResponse = await proxiedFetch(
+      "https://account.microsoft.com/auth/acquire-onbehalf-of-token?scopes=MSComServiceMBISSL",
+      {
+        headers: {
+          ...TOKEN_HEADERS,
+          "User-Agent": DEFAULT_HEADERS["User-Agent"],
+          Referer: "https://account.microsoft.com/billing/redeem",
+          Cookie: cookieJar,
+        },
+      }
+    );
+
+    if (tokenResponse.status !== 200) {
+      console.log(`[PURCHASER] Token request returned ${tokenResponse.status} for ${email}`);
+      return null;
+    }
 
     const tokenText = await tokenResponse.text();
     let tokenData;
@@ -302,7 +154,7 @@ async function loginToStore(email, password) {
     console.log(`[PURCHASER] Login SUCCESS for ${email}`);
     return {
       token: tokenData[0].token,
-      cookies,
+      cookieJar,
       headers: DEFAULT_HEADERS,
       email,
     };
@@ -312,8 +164,6 @@ async function loginToStore(email, password) {
     return null;
   }
 }
-
-// ── Product Search ───────────────────────────────────────────
 
 async function searchProducts(query, market = "US", language = "en-US") {
   try {
@@ -404,29 +254,31 @@ function generateReferenceId() {
 
 async function getStoreCartState(session) {
   try {
-    const msCv = crypto.randomUUID().replace(/-/g, "").substring(0, 16) + ".1";
+    const msCv = "xddT7qMNbECeJpTq.6.2";
     const payload = new URLSearchParams({
       data: '{"usePurchaseSdk":true}',
       market: "US",
       cV: msCv,
-      locale: "en-US",
+      locale: "en-GB",
       msaTicket: session.token,
       pageFormat: "full",
-      urlRef: "https://www.microsoft.com/store",
-      clientType: "MicrosoftCom",
+      urlRef: "https://account.microsoft.com/billing/redeem",
+      isRedeem: "true",
+      clientType: "AccountMicrosoftCom",
       layout: "Inline",
-      cssOverride: "StorePurchase",
-      scenario: "purchase",
+      cssOverride: "AMC",
+      scenario: "redeem",
+      timeToInvokeIframe: "4977",
       sdkVersion: "VERSION_PLACEHOLDER",
     });
 
     const res = await proxiedFetch(
-      `https://www.microsoft.com/store/purchase/buynowui/checkout?ms-cv=${msCv}&market=US&locale=en-US&clientName=MicrosoftCom`,
+      `https://www.microsoft.com/store/purchase/buynowui/redeemnow?ms-cv=${msCv}&market=US&locale=en-GB&clientName=AccountMicrosoftCom`,
       {
         method: "POST",
         headers: {
           ...session.headers,
-          Cookie: session.cookies.toString(),
+          Cookie: session.cookieJar,
           "Content-Type": "application/x-www-form-urlencoded",
         },
         body: payload.toString(),
@@ -469,7 +321,7 @@ async function purchaseProduct(session, productId, skuId, availabilityId, storeS
       "content-type": "application/json",
       "x-authorization-muid": storeState.muid,
       accept: "*/*",
-      Cookie: session.cookies.toString(),
+      Cookie: session.cookieJar,
     };
 
     // Step 1: Add to cart

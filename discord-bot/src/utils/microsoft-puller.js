@@ -700,7 +700,7 @@ async function pullCodes(accounts, onProgress, signal) {
     if (onProgress) onProgress("validate", { done, total, status: lastResult?.status });
   }, signal);
 
-  return { fetchResults, prsResults, validateResults };
+  return { fetchResults, validateResults };
 }
 
 /**

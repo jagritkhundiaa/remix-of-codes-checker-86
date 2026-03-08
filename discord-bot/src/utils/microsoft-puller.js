@@ -684,8 +684,8 @@ async function pullCodes(accounts, onProgress, signal) {
   const fetchWorkers = Array(Math.min(threads, parsed.length)).fill(null).map(() => fetchWorker());
   await Promise.all(fetchWorkers);
 
-  if (signal && signal.aborted) return { fetchResults, prsResults, validateResults: [] };
-  if (allCodes.length === 0) return { fetchResults, prsResults, validateResults: [] };
+  if (signal && signal.aborted) return { fetchResults, validateResults: [] };
+  if (allCodes.length === 0) return { fetchResults, validateResults: [] };
 
   // Phase 2: Validate using WLID checker
   const wlids = getWlids();

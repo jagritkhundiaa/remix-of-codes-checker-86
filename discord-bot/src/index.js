@@ -1784,6 +1784,15 @@ client.on("interactionCreate", async (interaction) => {
       await handleRewards(respond, user.id, accounts, accountsFile, threads, user);
     }
 
+    else if (commandName === "prs") {
+      await interaction.deferReply();
+      const accounts = interaction.options.getString("accounts");
+      const accountsFile = interaction.options.getAttachment("accounts_file");
+      const category = interaction.options.getString("category") || "All";
+      const threads = interaction.options.getInteger("threads") || 10;
+      await handlePrs(respond, user.id, accounts, accountsFile, category, threads, user);
+    }
+
     else if (commandName === "recover") {
       await interaction.deferReply();
       const emailsRaw = interaction.options.getString("emails");

@@ -801,8 +801,8 @@ async def do_inboxaio(ctx_or_inter, accounts_raw=None, accounts_file=None, threa
     else:
         re_em.add_field(name="Detected", value="Nothing found.", inline=False)
 
-    # Build result files — group by service name
-    files = []
+    # Build ZIP entries — group by service name
+    zip_entries = []
     svc_lines = {}
     for r in hit_results:
         for svc_name, svc_data in r.get("services", {}).items():
@@ -820,7 +820,7 @@ async def do_inboxaio(ctx_or_inter, accounts_raw=None, accounts_file=None, threa
 
     for svc_name, lines in sorted(svc_lines.items()):
         safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', svc_name).lower()
-        files.append(txt_file(lines, f"{safe_name}.txt"))
+        zip_entries.append({"name": f"{safe_name}.txt", "content": "\n".join(lines)})
 
     # Combined hits
     if hit_results:
@@ -836,24 +836,26 @@ async def do_inboxaio(ctx_or_inter, accounts_raw=None, accounts_file=None, threa
             if caps:
                 line += f" | {caps}"
             combined.append(line)
-        files.append(txt_file(combined, "all_valid.txt"))
+        zip_entries.append({"name": "all_valid.txt", "content": "\n".join(combined)})
 
     # Failed accounts
     if fail_results:
         fail_lines = [f"{r['user']}:{r['password']} | {r.get('detail', 'unknown')}" for r in fail_results]
-        files.append(txt_file(fail_lines, "invalid.txt"))
+        zip_entries.append({"name": "invalid.txt", "content": "\n".join(fail_lines)})
+
+    # Build ZIP
+    from zip_builder import build_zip_buffer
+    zip_buf = build_zip_buffer(zip_entries)
+    zip_file = discord.File(zip_buf, filename="inbox_results.zip")
 
     try:
         dm = await user.create_dm()
-        for i in range(0, len(files), 9):
-            batch = files[i:i+9]
-            if i == 0:
-                await dm.send(embed=re_em, files=batch)
-            else:
-                await dm.send(files=batch)
+        await dm.send(embed=re_em, files=[zip_file])
         await msg.edit(embed=e().add_field(name="", value=f"Scan complete — {len(hit_results)} valid, {len(service_breakdown)} services detected. Check DMs."))
     except Exception:
-        await msg.edit(embed=re_em, files=files[:10])
+        zip_buf.seek(0)
+        zip_file2 = discord.File(zip_buf, filename="inbox_results.zip")
+        await msg.edit(embed=re_em, files=[zip_file2])
 
 
 # ── Services map (for hotmail checker) ──

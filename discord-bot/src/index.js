@@ -1105,6 +1105,14 @@ client.on("interactionCreate", async (interaction) => {
     return;
   }
 
+  // Handle help category select menu
+  if (interaction.isStringSelectMenu() && interaction.customId === "help_category") {
+    const category = interaction.values[0];
+    const prefix = config.PREFIX;
+    await interaction.update({ embeds: [helpCategoryEmbed(category, prefix)], components: [helpSelectMenu()] });
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   // Channel lock enforcement

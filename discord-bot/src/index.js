@@ -714,13 +714,20 @@ async function handlePurchase(respond, userId, accountsRaw, accountsFile, produc
     // Use the first available SKU
     const sku = product.skus[0];
 
+    let purchased = 0;
+    let failed = 0;
+    let lastResult = null;
+
     const msg = await respond({
       embeds: [purchaseProgressEmbed({
         product: product.title,
         price: `${sku.price} ${sku.currency}`,
         done: 0,
         total: accounts.length,
-        status: "Starting",
+        phase: "login",
+        currentAccount: accounts[0]?.split(":")[0] || "",
+        purchased: 0,
+        failed: 0,
       })],
       components: [stopButton(userId)],
       fetchReply: true,
@@ -733,21 +740,25 @@ async function handlePurchase(respond, userId, accountsRaw, accountsFile, produc
       sku.skuId,
       sku.availabilityId,
       (phase, detail) => {
+        if (phase === "result") {
+          if (detail.success) purchased++;
+          else failed++;
+          lastResult = { email: detail.email, success: detail.success, orderId: detail.orderId, error: detail.error };
+        }
+
         const now = Date.now();
         if (now - lastUpdate > 2000) {
           lastUpdate = now;
-          let status = "Processing";
-          if (phase === "login") status = `Logging in: ${detail.email}`;
-          else if (phase === "cart") status = `Getting cart: ${detail.email}`;
-          else if (phase === "purchase") status = `Purchasing: ${detail.email}`;
-          else if (phase === "result") status = detail.success ? `Purchased: ${detail.email}` : `Failed: ${detail.email}`;
-
           updateProgress(msg, purchaseProgressEmbed({
             product: product.title,
             price: `${sku.price} ${sku.currency}`,
             done: detail.done || 0,
             total: detail.total || accounts.length,
-            status,
+            phase,
+            currentAccount: detail.email,
+            purchased,
+            failed,
+            lastResult,
           }), userId);
         }
       },

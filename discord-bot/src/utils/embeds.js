@@ -360,17 +360,43 @@ function purchaseProgressEmbed(details) {
   const filled = Math.round((pct / 100) * barLen);
   const bar = "#".repeat(filled) + "-".repeat(barLen - filled);
 
+  const stepIcons = { login: "[1/4]", cart: "[2/4]", purchase: "[3/4]", result: "[4/4]" };
+  const stepLabels = { login: "Logging in", cart: "Loading cart", purchase: "Purchasing", result: "Done" };
+
   const lines = [
     "Purchasing",
     "----------------------------",
     "",
-    `  Product: ${details.product}`,
-    `  Price:   ${details.price}`,
+    `  Product    ${details.product}`,
+    `  Price      ${details.price}`,
     "",
     `  [${bar}] ${pct}%`,
     `  ${details.done} / ${details.total} accounts`,
   ];
-  if (details.status) lines.push("", `  Status: ${details.status}`);
+
+  if (details.currentAccount) {
+    lines.push("");
+    const step = stepIcons[details.phase] || "[--]";
+    const label = stepLabels[details.phase] || "Processing";
+    lines.push(`  ${step} ${label}`);
+    lines.push(`  Account  ${details.currentAccount}`);
+  }
+
+  if (details.purchased > 0 || details.failed > 0) {
+    lines.push("");
+    lines.push(`  Purchased  ${details.purchased || 0}`);
+    lines.push(`  Failed     ${details.failed || 0}`);
+  }
+
+  if (details.lastResult) {
+    lines.push("");
+    const icon = details.lastResult.success ? "+" : "x";
+    const msg = details.lastResult.success
+      ? `Order: ${details.lastResult.orderId || "OK"}`
+      : details.lastResult.error || "Failed";
+    lines.push(`  [${icon}] ${details.lastResult.email}`);
+    lines.push(`      ${msg}`);
+  }
 
   return header({ thumbnail: false })
     .setColor(COLORS.INFO)

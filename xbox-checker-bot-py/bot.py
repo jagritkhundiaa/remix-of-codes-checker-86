@@ -1237,8 +1237,6 @@ async def slash_help(interaction: discord.Interaction):
         f"  /claim + file           Claim WLID tokens",
         f"  /pull + file            Pull Game Pass codes",
         f"  /promopuller + file     Pull promo links",
-        f"  /changer <newpass>      Change passwords",
-        f"  /rewards + file         Check Rewards pts",
         f"  /inboxaio + file        Scan inbox (156 svcs)",
         f"  /wlidset + tokens       Set WLID tokens",
         f"  /stop                   Stop running task",

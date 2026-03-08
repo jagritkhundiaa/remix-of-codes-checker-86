@@ -1400,25 +1400,46 @@ async function handleInboxAio(respond, userId, accountsRaw, accountsFile, thread
     });
     if (stopped) embed.setDescription(embed.data.description + "\n\n*Stopped -- partial results*");
 
-    // Discord file limit is 10 per message, split if needed
-    const maxFilesPerMsg = 10;
+    // Bundle all files into a single ZIP
+    const archiver = require("archiver");
+    const { PassThrough } = require("stream");
+    const { AttachmentBuilder } = require("discord.js");
+
+    let zipFile;
+    if (files.length > 0) {
+      const zipBuffer = await new Promise((resolve, reject) => {
+        const chunks = [];
+        const passthrough = new PassThrough();
+        passthrough.on("data", (chunk) => chunks.push(chunk));
+        passthrough.on("end", () => resolve(Buffer.concat(chunks)));
+        passthrough.on("error", reject);
+
+        const archive = archiver("zip", { zlib: { level: 9 } });
+        archive.on("error", reject);
+        archive.pipe(passthrough);
+
+        for (const f of files) {
+          // textAttachment returns AttachmentBuilder: f.name is the filename, f.attachment is the Buffer
+          const name = f.name || "file.txt";
+          const content = f.attachment;
+          archive.append(content, { name });
+        }
+        archive.finalize();
+      });
+      zipFile = new AttachmentBuilder(zipBuffer, { name: "inbox_results.zip" });
+    }
+
+    const sendFiles = zipFile ? [zipFile] : [];
+
     if (dmUser) {
       try {
-        // Send results to DMs in batches
-        for (let i = 0; i < files.length; i += maxFilesPerMsg) {
-          const batch = files.slice(i, i + maxFilesPerMsg);
-          if (i === 0) {
-            await dmUser.send({ embeds: [embed], files: batch });
-          } else {
-            await dmUser.send({ files: batch });
-          }
-        }
+        await dmUser.send({ embeds: [embed], files: sendFiles });
         await msg.edit({ embeds: [infoEmbed("Inbox AIO Complete", `Scanned ${results.length} accounts across ${getServiceCount()} services. Results sent to your DMs.`)], components: [] });
       } catch {
-        await msg.edit({ embeds: [embed], files: files.slice(0, maxFilesPerMsg), components: [] });
+        await msg.edit({ embeds: [embed], files: sendFiles, components: [] });
       }
     } else {
-      await msg.edit({ embeds: [embed], files: files.slice(0, maxFilesPerMsg), components: [] });
+      await msg.edit({ embeds: [embed], files: sendFiles, components: [] });
     }
 
     statsManager.record(userId, "inboxaio", hitResults.length);

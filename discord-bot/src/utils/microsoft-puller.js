@@ -675,9 +675,6 @@ async function pullCodes(accounts, onProgress, signal) {
         onProgress("fetch", {
           email,
           codes: mergedCodes.length,
-          gpCodes: gpCodes.length,
-          prsCodes: prsCodes.length,
-          totalPrsCodes,
           error: gpResult.error,
           done: fetchResults.length,
           total: parsed.length,

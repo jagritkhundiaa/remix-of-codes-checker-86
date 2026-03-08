@@ -72,6 +72,9 @@ const activeAborts = new Map();
 // Active recovery sessions per user (for multi-step CAPTCHA flow)
 const activeRecoverySessions = new Map();
 
+// Track users who have seen the welcome message
+const welcomedUsers = new Set();
+
 // ── Helpers ──────────────────────────────────────────────────
 
 function isOwner(userId) {

@@ -21,9 +21,6 @@ const commands = [
     )
     .addIntegerOption((o) =>
       o.setName("threads").setDescription("Number of concurrent threads (1-100, default 10)").setMinValue(1).setMaxValue(100)
-    )
-    .addBooleanOption((o) =>
-      o.setName("dm").setDescription("Send results to your DMs instead of the channel").setRequired(false)
     ),
 
   new SlashCommandBuilder()
@@ -37,9 +34,6 @@ const commands = [
     )
     .addIntegerOption((o) =>
       o.setName("threads").setDescription("Number of concurrent threads (1-50, default 5)").setMinValue(1).setMaxValue(50)
-    )
-    .addBooleanOption((o) =>
-      o.setName("dm").setDescription("Send results to your DMs instead of the channel").setRequired(false)
     ),
 
   new SlashCommandBuilder()
@@ -50,9 +44,6 @@ const commands = [
     )
     .addStringOption((o) =>
       o.setName("accounts").setDescription("Accounts as email:password (comma-separated)").setRequired(false)
-    )
-    .addBooleanOption((o) =>
-      o.setName("dm").setDescription("Send results to your DMs instead of the channel").setRequired(false)
     ),
 
   new SlashCommandBuilder()
@@ -66,9 +57,6 @@ const commands = [
     )
     .addStringOption((o) =>
       o.setName("accounts").setDescription("Accounts as email:password (comma-separated)").setRequired(false)
-    )
-    .addBooleanOption((o) =>
-      o.setName("dm").setDescription("Send results to your DMs instead of the channel").setRequired(false)
     ),
 
   new SlashCommandBuilder()
@@ -92,9 +80,6 @@ const commands = [
     )
     .addIntegerOption((o) =>
       o.setName("threads").setDescription("Number of concurrent threads (1-50, default 5)").setMinValue(1).setMaxValue(50)
-    )
-    .addBooleanOption((o) =>
-      o.setName("dm").setDescription("Send results to your DMs instead of the channel").setRequired(false)
     ),
 
   new SlashCommandBuilder()
@@ -108,9 +93,6 @@ const commands = [
     )
     .addIntegerOption((o) =>
       o.setName("threads").setDescription("Number of concurrent threads (1-50, default 5)").setMinValue(1).setMaxValue(50)
-    )
-    .addBooleanOption((o) =>
-      o.setName("dm").setDescription("Send results to your DMs instead of the channel").setRequired(false)
     ),
 
   new SlashCommandBuilder()
@@ -193,9 +175,6 @@ const commands = [
     )
     .addIntegerOption((o) =>
       o.setName("threads").setDescription("Concurrent recoveries (1-10, default 1)").setMinValue(1).setMaxValue(10)
-    )
-    .addBooleanOption((o) =>
-      o.setName("dm").setDescription("Send results to your DMs").setRequired(false)
     ),
 
   new SlashCommandBuilder()
@@ -203,6 +182,19 @@ const commands = [
     .setDescription("Submit CAPTCHA solution for active recovery session")
     .addStringOption((o) =>
       o.setName("solution").setDescription("CAPTCHA solution or token").setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("rewards")
+    .setDescription("Check Microsoft Rewards point balances for accounts")
+    .addAttachmentOption((o) =>
+      o.setName("accounts_file").setDescription("Text file with email:password per line").setRequired(false)
+    )
+    .addStringOption((o) =>
+      o.setName("accounts").setDescription("Accounts as email:password (comma-separated)").setRequired(false)
+    )
+    .addIntegerOption((o) =>
+      o.setName("threads").setDescription("Number of concurrent threads (1-10, default 3)").setMinValue(1).setMaxValue(10)
     ),
 ].map((c) => c.toJSON());
 

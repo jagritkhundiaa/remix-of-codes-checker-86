@@ -24,24 +24,29 @@ const {
   checkResultsEmbed,
   claimResultsEmbed,
   pullFetchProgressEmbed,
+  pullLiveProgressEmbed,
   pullResultsEmbed,
   purchaseResultsEmbed,
   purchaseProgressEmbed,
   productSearchEmbed,
   changerResultsEmbed,
   accountCheckerResultsEmbed,
+  rewardsResultsEmbed,
   errorEmbed,
   successEmbed,
   infoEmbed,
   ownerOnlyEmbed,
   authListEmbed,
-  helpEmbed,
+  helpOverviewEmbed,
+  helpCategoryEmbed,
+  helpSelectMenu,
   adminPanelEmbed,
   detailedStatsEmbed,
   textAttachment,
   recoverProgressEmbed,
   recoverResultEmbed,
 } = require("./utils/embeds");
+const { checkRewardsBalances } = require("./utils/microsoft-rewards");
 
 const client = new Client({
   intents: [
@@ -317,6 +322,9 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
     let lastAccount = "";
     let lastCodes = 0;
     let lastError = null;
+    let fetchResultsRef = [];
+    let validateCounts = {};
+    const startTime = Date.now();
 
     const { fetchResults, validateResults } = await pullCodes(accounts, (phase, detail) => {
       const now = Date.now();
@@ -339,11 +347,24 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
           }), userId);
         }
       } else if (phase === "validate_start") {
-        updateProgress(msg, progressEmbed(0, detail.total, "Validating codes"), userId);
+        // Capture fetch results for live display
+        if (detail.fetchResults) fetchResultsRef = detail.fetchResults;
+        validateCounts = { done: 0, total: detail.total, valid: 0, used: 0, balance: 0, expired: 0, regionLocked: 0, invalid: 0 };
+        updateProgress(msg, pullLiveProgressEmbed(fetchResultsRef, validateCounts, { username, startTime }), userId);
       } else if (phase === "validate") {
+        validateCounts.done = detail.done;
+        // Update counts from detail if available
+        if (detail.status) {
+          if (detail.status === "valid") validateCounts.valid++;
+          else if (detail.status === "used" || detail.status === "REDEEMED") validateCounts.used++;
+          else if (detail.status === "BALANCE_CODE") validateCounts.balance++;
+          else if (detail.status === "expired" || detail.status === "EXPIRED") validateCounts.expired++;
+          else if (detail.status === "REGION_LOCKED") validateCounts.regionLocked++;
+          else if (detail.status === "invalid" || detail.status === "error" || detail.status === "INVALID") validateCounts.invalid++;
+        }
         if (now - lastUpdate > 2000) {
           lastUpdate = now;
-          updateProgress(msg, progressEmbed(detail.done, detail.total, "Validating codes"), userId);
+          updateProgress(msg, pullLiveProgressEmbed(fetchResultsRef, validateCounts, { username, startTime }), userId);
         }
       }
     }, ac.signal);
@@ -989,6 +1010,82 @@ async function handleCaptchaSolve(respond, userId, solution) {
   return respond({ embeds: [recoverResultEmbed(session.email, false, `Unexpected result (phase: ${result.phase})`)] });
 }
 
+// ── Rewards handler ─────────────────────────────────────────
+
+async function handleRewards(respond, userId, accountsRaw, accountsFile, threads = 3, dmUser = null) {
+  if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
+
+  const acquire = limiter.acquire(userId, "rewards");
+  if (!acquire.ok) {
+    const reason = acquire.reason === "busy"
+      ? "You already have a command running. Wait for it to finish."
+      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
+    return respond({ embeds: [errorEmbed(reason)] });
+  }
+
+  const ac = new AbortController();
+  activeAborts.set(userId, ac);
+
+  try {
+    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
+    if (accountsFile) {
+      const lines = await fetchAttachmentLines(accountsFile);
+      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
+    }
+
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
+
+    const msg = await respond({
+      embeds: [progressEmbed(0, accounts.length, "Checking Rewards Balances")],
+      components: [stopButton(userId)],
+      fetchReply: true,
+    });
+
+    let lastUpdate = Date.now();
+    const results = await checkRewardsBalances(accounts, threads, (done, total) => {
+      const now = Date.now();
+      if (now - lastUpdate > 2000) {
+        lastUpdate = now;
+        updateProgress(msg, progressEmbed(done, total, "Checking Rewards Balances"), userId);
+      }
+    }, ac.signal);
+
+    const stopped = ac.signal.aborted;
+    const files = [];
+    const success = results.filter(r => r.success);
+    const failed = results.filter(r => !r.success);
+
+    if (success.length > 0) {
+      files.push(textAttachment(
+        success.map(r => `${r.email} | ${r.balance.toLocaleString()} pts | Level: ${r.levelName} | Lifetime: ${r.lifetimePoints.toLocaleString()} | Streak: ${r.streak}`),
+        "rewards_balances.txt"
+      ));
+    }
+    if (failed.length > 0) {
+      files.push(textAttachment(failed.map(r => `${r.email} | ${r.error}`), "rewards_failed.txt"));
+    }
+
+    const embed = rewardsResultsEmbed(results);
+    if (stopped) embed.setDescription(embed.data.description + "\n\n*Stopped -- partial results*");
+
+    if (dmUser) {
+      try {
+        await dmUser.send({ embeds: [embed], files });
+        await msg.edit({ embeds: [infoEmbed("Rewards Check Complete", "Results sent to your DMs.")], components: [] });
+      } catch {
+        await msg.edit({ embeds: [embed], files, components: [] });
+      }
+    } else {
+      await msg.edit({ embeds: [embed], files, components: [] });
+    }
+  } catch (err) {
+    await respond({ embeds: [errorEmbed(`Unexpected error: ${err.message}`)] });
+  } finally {
+    activeAborts.delete(userId);
+    limiter.release(userId);
+  }
+}
+
 // ── Slash Commands ───────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {
@@ -1005,6 +1102,14 @@ client.on("interactionCreate", async (interaction) => {
     } else {
       await interaction.reply({ content: "No active process found.", ephemeral: true });
     }
+    return;
+  }
+
+  // Handle help category select menu
+  if (interaction.isStringSelectMenu() && interaction.customId === "help_category") {
+    const category = interaction.values[0];
+    const prefix = config.PREFIX;
+    await interaction.update({ embeds: [helpCategoryEmbed(category, prefix)], components: [helpSelectMenu()] });
     return;
   }
 
@@ -1118,7 +1223,15 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     else if (commandName === "help") {
-      await respond({ embeds: [helpEmbed("/")] });
+      await respond({ embeds: [helpOverviewEmbed("/")], components: [helpSelectMenu()] });
+    }
+
+    else if (commandName === "rewards") {
+      await interaction.deferReply();
+      const accounts = interaction.options.getString("accounts");
+      const accountsFile = interaction.options.getAttachment("accounts_file");
+      const threads = interaction.options.getInteger("threads") || 3;
+      await handleRewards(respond, user.id, accounts, accountsFile, threads, user);
     }
 
     else if (commandName === "recover") {
@@ -1291,7 +1404,16 @@ client.on("messageCreate", async (message) => {
     }
 
     else if (cmd === "help") {
-      return respond({ embeds: [helpEmbed(config.PREFIX)] });
+      return respond({ embeds: [helpOverviewEmbed(config.PREFIX)], components: [helpSelectMenu()] });
+    }
+
+    else if (cmd === "rewards") {
+      const accountsRaw = args.join(" ");
+      const attachment = message.attachments.first();
+      if (!accountsRaw && !attachment) {
+        return respond({ embeds: [infoEmbed("Usage", "`.rewards <accounts>`\nProvide email:password or attach a `.txt` file.\nResults are always sent to your DMs.")] });
+      }
+      await handleRewards(respond, message.author.id, accountsRaw, attachment, 3, message.author);
     }
 
     else if (cmd === "recover") {

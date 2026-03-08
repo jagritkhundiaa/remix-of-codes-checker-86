@@ -93,6 +93,18 @@ function canUse(userId) {
   return allowed;
 }
 
+/**
+ * Send welcome embed on first command use (per session).
+ * Returns true if welcome was sent (caller should continue normally).
+ */
+async function sendWelcomeIfNeeded(respond, userId, username) {
+  if (welcomedUsers.has(userId)) return;
+  welcomedUsers.add(userId);
+  try {
+    await respond({ embeds: [welcomeEmbed(username)] });
+  } catch {}
+}
+
 function splitInput(raw) {
   if (!raw) return [];
   return raw

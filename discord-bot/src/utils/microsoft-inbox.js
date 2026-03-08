@@ -374,17 +374,15 @@ async function attemptCheck(email, password) {
       hisRegion: "", hisScaleUnit: "", passwd: password,
     });
 
-    const resp = await proxiedFetch(LOGIN_URL, {
+    const resp = await sessionFetch(LOGIN_URL, {
       method: "POST",
-      headers: { ...LOGIN_HEADERS, Cookie: cookieJar.toString() },
+      headers: { ...LOGIN_HEADERS },
       body: postData.toString(),
-      redirect: "follow",
       signal: AbortSignal.timeout(20000),
-    });
+    }, cookieJar);
 
     const body = await resp.text();
-    const finalUrl = resp.url;
-    cookieJar.parseFromHeaders(resp.headers);
+    const finalUrl = resp._finalUrl || resp.url;
 
     // Status detection
     if ([

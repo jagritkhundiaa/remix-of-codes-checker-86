@@ -768,7 +768,7 @@ async function handlePurchase(respond, userId, accountsRaw, accountsFile, produc
     const stopped = ac.signal.aborted;
     const files = [];
     const successful = results.filter(r => r.success);
-    const failed = results.filter(r => !r.success);
+    const failedResults = results.filter(r => !r.success);
 
     if (successful.length > 0)
       files.push(textAttachment(successful.map(r => `${r.email} | ${r.orderId || "OK"}`), "purchased.txt"));

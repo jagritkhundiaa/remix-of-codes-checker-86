@@ -1040,18 +1040,6 @@ async def slash_promopuller(interaction: discord.Interaction, accounts: str = No
     await do_promopuller(interaction, accounts, accounts_file, is_slash=True)
 
 
-@bot.tree.command(name="changer", description="Change passwords for Microsoft accounts")
-@app_commands.describe(new_password="New password to set", accounts="Accounts as email:pass", accounts_file="Text file with email:pass", threads="Concurrent threads (1-3)")
-async def slash_changer(interaction: discord.Interaction, new_password: str, accounts: str = None, accounts_file: discord.Attachment = None, threads: app_commands.Range[int, 1, 3] = 3):
-    await interaction.response.defer()
-    await do_changer(interaction, accounts, accounts_file, new_password, threads, is_slash=True)
-
-
-@bot.tree.command(name="rewards", description="Check Microsoft Rewards balances")
-@app_commands.describe(accounts="Accounts as email:pass", accounts_file="Text file with email:pass", threads="Concurrent threads (1-5)")
-async def slash_rewards(interaction: discord.Interaction, accounts: str = None, accounts_file: discord.Attachment = None, threads: app_commands.Range[int, 1, 5] = 3):
-    await interaction.response.defer()
-    await do_rewards(interaction, accounts, accounts_file, threads, is_slash=True)
 
 
 @bot.tree.command(name="inboxaio", description=f"Scan Hotmail/Outlook inboxes for {get_service_count()}+ services")

@@ -307,7 +307,8 @@ async function loginToStore(email, password) {
       email,
     };
   } catch (err) {
-    console.error(`[PURCHASER] Login EXCEPTION for ${email}:`, err.message);
+    const cause = err?.cause?.message ? ` | cause: ${err.cause.message}` : "";
+    console.error(`[PURCHASER] Login EXCEPTION for ${email}: ${err.message}${cause}`);
     return null;
   }
 }

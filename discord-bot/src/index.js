@@ -1485,10 +1485,31 @@ client.once("ready", () => {
   const proxyCount = loadProxies();
   console.log(`Proxies: ${config.USE_PROXIES ? `Enabled (${proxyCount} loaded)` : "Disabled"}`);
   
-  client.user.setPresence({
-    status: "online",
-    activities: [{ name: ".gg/autizmens", type: 3 }],
-  });
+  // Dynamic rich presence — cycles through stats
+  const presenceMessages = [
+    () => ({ name: ".gg/autizmens", type: 3 }),
+    () => ({ name: `${getWlidCount()} WLIDs stored`, type: 3 }),
+    () => ({ name: `${auth.getAllAuthorized().length} users authorized`, type: 3 }),
+    () => ({ name: `${limiter.getActiveCount()} active sessions`, type: 3 }),
+    () => {
+      const s = statsManager.getSummary();
+      return { name: `${s.total_processed} processed`, type: 3 };
+    },
+    () => ({ name: ".help | .pull | .check", type: 2 }),
+  ];
+
+  let presenceIndex = 0;
+  function cyclePresence() {
+    const activity = presenceMessages[presenceIndex % presenceMessages.length]();
+    client.user.setPresence({
+      status: "online",
+      activities: [activity],
+    });
+    presenceIndex++;
+  }
+
+  cyclePresence();
+  setInterval(cyclePresence, 15000); // cycle every 15 seconds
 });
 
 client.login(config.BOT_TOKEN);

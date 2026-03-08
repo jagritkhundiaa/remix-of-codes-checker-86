@@ -1049,6 +1049,8 @@ module.exports = {
   changerResultsEmbed,
   accountCheckerResultsEmbed,
   rewardsResultsEmbed,
+  prsProgressEmbed,
+  prsResultsEmbed,
   errorEmbed,
   successEmbed,
   infoEmbed,

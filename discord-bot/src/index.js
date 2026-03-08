@@ -1143,6 +1143,11 @@ client.on("interactionCreate", async (interaction) => {
 
   const { commandName, user } = interaction;
 
+  // Send welcome on first use (to DMs)
+  await sendWelcomeIfNeeded(async (opts) => {
+    try { await user.send(opts); } catch {}
+  }, user.id, user.username);
+
   try {
     if (commandName === "check") {
       await interaction.deferReply();

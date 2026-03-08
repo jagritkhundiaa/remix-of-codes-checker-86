@@ -219,6 +219,8 @@ SERVICES = [
     {"keyword": "headspace", "label": "Headspace", "category": "Health"},
     {"keyword": "calm", "label": "Calm", "category": "Health"},
     {"keyword": "strava", "label": "Strava", "category": "Health"},
+    # Marketplace
+    {"keyword": "eldorado.gg", "label": "Eldorado.gg", "category": "Gaming"},
 ]
 
 

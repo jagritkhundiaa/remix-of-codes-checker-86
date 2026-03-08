@@ -63,6 +63,9 @@ const SERVICES = {
   "noreply@ebay.com": "eBay",
   "starplus@mail.starplus.com": "StarPlus",
   "no-reply@starplus.com": "StarPlus",
+  "noreply@eldorado.gg": "Eldorado.gg",
+  "no-reply@eldorado.gg": "Eldorado.gg",
+  "support@eldorado.gg": "Eldorado.gg",
 };
 
 const MAX_RETRIES = 3;

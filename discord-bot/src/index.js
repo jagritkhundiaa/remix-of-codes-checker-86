@@ -13,6 +13,7 @@ const { sendToWebhook } = require("./utils/webhook");
 const { checkCodes } = require("./utils/microsoft-checker");
 const { claimWlids } = require("./utils/microsoft-claimer");
 const { pullCodes } = require("./utils/microsoft-puller");
+const { savePromosUnchecked } = require("./utils/supabase-store");
 const { searchProducts, getProductDetails, purchaseItems } = require("./utils/microsoft-purchaser");
 const { changePasswords, checkAccounts } = require("./utils/microsoft-changer");
 const { initiateRecovery, submitCaptchaAndContinue, submitNewPassword, downloadCaptchaImage } = require("./utils/microsoft-recover");

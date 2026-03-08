@@ -947,4 +947,6 @@ module.exports = {
   textAttachment,
   recoverProgressEmbed,
   recoverResultEmbed,
+  inboxAioProgressEmbed,
+  inboxAioResultsEmbed,
 };

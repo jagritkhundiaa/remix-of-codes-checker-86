@@ -1496,8 +1496,6 @@ async def cmd_help(ctx):
         f"  {p}claim + .txt          Claim WLID tokens",
         f"  {p}pull + .txt           Pull Game Pass codes",
         f"  {p}promopuller + .txt    Pull promo links",
-        f"  {p}changer <newpass>     Change passwords",
-        f"  {p}rewards + .txt        Check Rewards pts",
         f"  {p}inboxaio + .txt       Scan inbox (156 svcs)",
         f"  {p}wlidset + tokens      Set WLID tokens",
         f"  {p}stop                  Stop running task",

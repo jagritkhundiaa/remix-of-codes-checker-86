@@ -361,8 +361,6 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
 
       if (phase === "fetch") {
         totalCodesSoFar += detail.codes;
-        totalGpCodes += (detail.gpCodes || 0);
-        totalPrsCodes += (detail.prsCodes || 0);
         lastAccount = detail.email;
         lastCodes = detail.codes;
         lastError = detail.error;

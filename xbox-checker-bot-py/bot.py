@@ -744,11 +744,16 @@ async def do_inboxaio(ctx_or_inter, accounts_raw=None, accounts_file=None, threa
         ]
         em.description = f"```\n" + "\n".join(block) + "\n```"
 
-        # Live top 20 services
+        # Live services - paginated 20 per field
         if live_svc_breakdown:
-            top = sorted(live_svc_breakdown.items(), key=lambda x: x[1], reverse=True)[:20]
-            svc_text = "\n".join(f"`{name}`: `{count}`" for name, count in top)
-            em.add_field(name="📬 Services Found", value=svc_text, inline=False)
+            top = sorted(live_svc_breakdown.items(), key=lambda x: x[1], reverse=True)
+            for page_idx in range(0, len(top), 20):
+                page = top[page_idx:page_idx + 20]
+                svc_text = "\n".join(f"◈ **{name}**: {count}" for name, count in page)
+                page_num = page_idx // 20 + 1
+                total_pages = (len(top) + 19) // 20
+                label = f"┃ Services ({page_num})" if total_pages > 1 else "┃ Services"
+                em.add_field(name=label, value=svc_text, inline=False)
 
         asyncio.run_coroutine_threadsafe(msg.edit(embed=em), bot.loop)
 

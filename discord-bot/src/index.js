@@ -379,8 +379,6 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
             done: detail.done,
             total: detail.total,
             totalCodes: totalCodesSoFar,
-            gpCodes: totalGpCodes,
-            prsCodes: totalPrsCodes,
             working: fetchWorking,
             failed: fetchFailed,
             withCodes: fetchWithCodes,

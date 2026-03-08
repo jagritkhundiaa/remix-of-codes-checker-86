@@ -26,6 +26,8 @@ const {
   pullFetchProgressEmbed,
   pullLiveProgressEmbed,
   pullResultsEmbed,
+  promoPullerFetchProgressEmbed,
+  promoPullerResultsEmbed,
   purchaseResultsEmbed,
   purchaseProgressEmbed,
   productSearchEmbed,

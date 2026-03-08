@@ -220,6 +220,10 @@ async function getXboxTokens(rpsToken) {
   }
 }
 
+function isLink(resource) {
+  return resource && (resource.startsWith("http://") || resource.startsWith("https://"));
+}
+
 async function fetchCodesFromXbox(uhs, xstsToken) {
   try {
     const auth = `XBL3.0 x=${uhs};${xstsToken}`;
@@ -230,13 +234,18 @@ async function fetchCodesFromXbox(uhs, xstsToken) {
         "User-Agent": "okhttp/4.12.0",
       },
     });
-    if (res.status !== 200) return [];
+    if (res.status !== 200) return { codes: [], links: [] };
 
     const data = await res.json();
     const codes = [];
+    const links = [];
     for (const offer of data.offers || []) {
       if (offer.resource) {
-        codes.push(offer.resource);
+        if (isLink(offer.resource)) {
+          links.push(offer.resource);
+        } else {
+          codes.push(offer.resource);
+        }
       } else if (offer.offerStatus === "available") {
         const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
         let cv = "";
@@ -260,14 +269,20 @@ async function fetchCodesFromXbox(uhs, xstsToken) {
           );
           if (claimRes.status === 200) {
             const claimData = await claimRes.json();
-            if (claimData.resource) codes.push(claimData.resource);
+            if (claimData.resource) {
+              if (isLink(claimData.resource)) {
+                links.push(claimData.resource);
+              } else {
+                codes.push(claimData.resource);
+              }
+            }
           }
         } catch {}
       }
     }
-    return codes;
+    return { codes, links };
   } catch {
-    return [];
+    return { codes: [], links: [] };
   }
 }
 

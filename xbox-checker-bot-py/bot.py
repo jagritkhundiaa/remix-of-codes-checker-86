@@ -735,20 +735,27 @@ async def do_inboxaio(ctx_or_inter, accounts_raw=None, accounts_file=None, threa
         bar_str = "█" * filled + "░" * (20 - filled)
 
         em = e()
+        cpm = int(done / sec * 60) if sec > 0 else 0
         block = [
             f"  Progress    [{bar_str}] {pct}%",
             f"  Processed   {done} / {total}",
             f"  Hits        {hits}",
             f"  Failed      {fails}",
+            f"  Speed       {cpm} checks/min",
             f"  Elapsed     {sec:.1f}s",
         ]
         em.description = f"```\n" + "\n".join(block) + "\n```"
 
-        # Live top 20 services
+        # Live services - paginated 20 per field
         if live_svc_breakdown:
-            top = sorted(live_svc_breakdown.items(), key=lambda x: x[1], reverse=True)[:20]
-            svc_text = "\n".join(f"`{name}`: `{count}`" for name, count in top)
-            em.add_field(name="📬 Services Found", value=svc_text, inline=False)
+            top = sorted(live_svc_breakdown.items(), key=lambda x: x[1], reverse=True)
+            for page_idx in range(0, len(top), 20):
+                page = top[page_idx:page_idx + 20]
+                svc_text = "\n".join(f"◈ **{name}**: {count}" for name, count in page)
+                page_num = page_idx // 20 + 1
+                total_pages = (len(top) + 19) // 20
+                label = f"┃ Services ({page_num})" if total_pages > 1 else "┃ Services"
+                em.add_field(name=label, value=svc_text, inline=False)
 
         asyncio.run_coroutine_threadsafe(msg.edit(embed=em), bot.loop)
 
@@ -781,11 +788,16 @@ async def do_inboxaio(ctx_or_inter, accounts_raw=None, accounts_file=None, threa
     re_em.description = f"```\n" + "\n".join(block) + "\n```"
 
     if service_breakdown:
-        top = sorted(service_breakdown.items(), key=lambda x: x[1], reverse=True)[:20]
-        svc_text = "\n".join(f"`{name}`: `{count}` accs" for name, count in top)
-        re_em.add_field(name="📬 Top Services", value=svc_text, inline=False)
+        top = sorted(service_breakdown.items(), key=lambda x: x[1], reverse=True)
+        for page_idx in range(0, len(top), 20):
+            page = top[page_idx:page_idx + 20]
+            svc_text = "\n".join(f"◈ **{name}**: {count}" for name, count in page)
+            page_num = page_idx // 20 + 1
+            total_pages = (len(top) + 19) // 20
+            label = f"┃ Services ({page_num})" if total_pages > 1 else "┃ Services"
+            re_em.add_field(name=label, value=svc_text, inline=False)
     else:
-        re_em.add_field(name="📬 Services", value="No services found.", inline=False)
+        re_em.add_field(name="┃ Services", value="No services detected.", inline=False)
 
     # Build files by category
     files = []

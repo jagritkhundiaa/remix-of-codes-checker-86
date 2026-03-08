@@ -1010,6 +1010,82 @@ async function handleCaptchaSolve(respond, userId, solution) {
   return respond({ embeds: [recoverResultEmbed(session.email, false, `Unexpected result (phase: ${result.phase})`)] });
 }
 
+// ── Rewards handler ─────────────────────────────────────────
+
+async function handleRewards(respond, userId, accountsRaw, accountsFile, threads = 3, dmUser = null) {
+  if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
+
+  const acquire = limiter.acquire(userId, "rewards");
+  if (!acquire.ok) {
+    const reason = acquire.reason === "busy"
+      ? "You already have a command running. Wait for it to finish."
+      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
+    return respond({ embeds: [errorEmbed(reason)] });
+  }
+
+  const ac = new AbortController();
+  activeAborts.set(userId, ac);
+
+  try {
+    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
+    if (accountsFile) {
+      const lines = await fetchAttachmentLines(accountsFile);
+      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
+    }
+
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
+
+    const msg = await respond({
+      embeds: [progressEmbed(0, accounts.length, "Checking Rewards Balances")],
+      components: [stopButton(userId)],
+      fetchReply: true,
+    });
+
+    let lastUpdate = Date.now();
+    const results = await checkRewardsBalances(accounts, threads, (done, total) => {
+      const now = Date.now();
+      if (now - lastUpdate > 2000) {
+        lastUpdate = now;
+        updateProgress(msg, progressEmbed(done, total, "Checking Rewards Balances"), userId);
+      }
+    }, ac.signal);
+
+    const stopped = ac.signal.aborted;
+    const files = [];
+    const success = results.filter(r => r.success);
+    const failed = results.filter(r => !r.success);
+
+    if (success.length > 0) {
+      files.push(textAttachment(
+        success.map(r => `${r.email} | ${r.balance.toLocaleString()} pts | Level: ${r.levelName} | Lifetime: ${r.lifetimePoints.toLocaleString()} | Streak: ${r.streak}`),
+        "rewards_balances.txt"
+      ));
+    }
+    if (failed.length > 0) {
+      files.push(textAttachment(failed.map(r => `${r.email} | ${r.error}`), "rewards_failed.txt"));
+    }
+
+    const embed = rewardsResultsEmbed(results);
+    if (stopped) embed.setDescription(embed.data.description + "\n\n*Stopped -- partial results*");
+
+    if (dmUser) {
+      try {
+        await dmUser.send({ embeds: [embed], files });
+        await msg.edit({ embeds: [infoEmbed("Rewards Check Complete", "Results sent to your DMs.")], components: [] });
+      } catch {
+        await msg.edit({ embeds: [embed], files, components: [] });
+      }
+    } else {
+      await msg.edit({ embeds: [embed], files, components: [] });
+    }
+  } catch (err) {
+    await respond({ embeds: [errorEmbed(`Unexpected error: ${err.message}`)] });
+  } finally {
+    activeAborts.delete(userId);
+    limiter.release(userId);
+  }
+}
+
 // ── Slash Commands ───────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {

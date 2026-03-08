@@ -365,8 +365,8 @@ async function attemptCheck(email, password) {
     const postData = new URLSearchParams({
       ps: "2", psRNGCDefaultType: "", psRNGCEntropy: "", psRNGCSLK: "",
       canary: "", ctx: "", hpgrequestid: "",
-      PPFT: "-Dim7vMfzjynvFHsYUX3COk7z2NZzCSnDj42yEbbf18uNb!Gl!I9kGKmv895GTY7Ilpr2XXnnVtOSLIiqU!RssMLamTzQEfbiJbXxrOD4nPZ4vTDo8s*CJdw6MoHmVuCcuCyH1kBvpgtCLUcPsDdx09kFqsWFDy9co!nwbCVhXJ*sjt8rZhAAUbA2nA7Z!GK5uQ$$",
-      PPSX: "PassportRN", NewUser: "1", FoundMSAs: "",
+      PPFT: "-Div0Bt28gmyaHIfgDZtd5xvxnb7eeDAQOIjXkqyoF1ekQB6gLEqbSdzNE05qpz*B1Q82VKHs*RNXPa8xZG1TJS5HGKjFMxGcQ51PMU77ulAR%21JjAUTPM*Am5lkZU6Sa%21wIdI6zYnUI8VYQHQOCJLb*lRsaiV5MhGQieznZ%21EynMuuBHbBfLr28btqCBqLhzZXQ%24%24",
+      PPSX: "Pa", NewUser: "1", FoundMSAs: "",
       fspost: "0", i21: "0", CookieDisclosure: "0",
       IsFidoSupported: "1", isSignupPost: "0", isRecoveryAttemptPost: "0",
       i13: "1", login: email, loginfmt: email,

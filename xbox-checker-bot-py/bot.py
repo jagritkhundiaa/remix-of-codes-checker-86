@@ -16,32 +16,53 @@ from ms_claimer import claim_wlids
 from ms_code_checker import check_codes
 from ms_puller import pull_codes, pull_links
 from ms_inbox import check_inbox_accounts, get_service_count
+from auth_manager import AuthManager, parse_duration, format_duration, format_expiry
 
 intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix=config.PREFIX, intents=intents, help_command=None)
 gen = GenManager()
+auth_mgr = AuthManager()
 active_stops = {}
 
 MAX_COMBO_LINES = 4000
 
-def e(color=None):
+
+def e(color=None, thumb=False, banner=False):
+    """Create a styled embed with optional thumbnail/banner."""
     em = discord.Embed(color=color or config.EMBED_COLOR, timestamp=discord.utils.utcnow())
-    em.set_footer(text=config.FOOTER)
+    em.set_footer(text=config.FOOTER, icon_url=config.THUMBNAIL_URL or discord.Embed.Empty)
+    if thumb and config.THUMBNAIL_URL:
+        em.set_thumbnail(url=config.THUMBNAIL_URL)
+    if banner and config.BANNER_URL:
+        em.set_image(url=config.BANNER_URL)
     return em
+
 
 def bar(cur, tot, w=20):
     pct = cur / tot if tot > 0 else 0
     f = round(pct * w)
-    return "\u2588" * f + "\u2591" * (w - f) + f" {cur}/{tot}"
+    return "#" * f + "-" * (w - f) + f" {cur}/{tot}"
+
 
 def txt_file(lines, name):
     buf = io.BytesIO("\n".join(lines).encode("utf-8"))
     return discord.File(buf, filename=name)
 
+
 def is_owner(uid):
     return str(uid) == config.OWNER_ID
+
+
+def is_admin_or_owner(uid):
+    return is_owner(uid) or auth_mgr.is_admin(str(uid))
+
+
+def can_use(uid):
+    """Check if a user is owner, admin, or authorized."""
+    return is_owner(uid) or auth_mgr.is_admin(str(uid)) or auth_mgr.is_authorized(str(uid))
+
 
 def parse_uid(s):
     if not s:

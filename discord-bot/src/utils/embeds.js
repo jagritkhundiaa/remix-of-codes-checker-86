@@ -497,10 +497,11 @@ function rewardsResultsEmbed(results) {
   const success = results.filter(r => r.success);
   const failed = results.filter(r => !r.success);
   const totalPoints = success.reduce((sum, r) => sum + r.balance, 0);
+  const totalLifetime = success.reduce((sum, r) => sum + (r.lifetimePoints || 0), 0);
   const avg = success.length > 0 ? Math.round(totalPoints / success.length).toLocaleString() : "0";
 
   const block = [
-    "Rewards Balance",
+    "Bing Rewards Balance",
     "----------------------------",
     "",
     `  ${pad("Checked")}${results.length}`,
@@ -510,11 +511,35 @@ function rewardsResultsEmbed(results) {
     "  Points",
     `  ${pad("Total")}${totalPoints.toLocaleString()}`,
     `  ${pad("Average")}${avg}`,
+    `  ${pad("Lifetime")}${totalLifetime.toLocaleString()}`,
   ];
 
   if (success.length > 0) {
     const highest = success.reduce((max, r) => r.balance > max.balance ? r : max);
     block.push(`  ${pad("Highest")}${highest.balance.toLocaleString()} (${highest.email.split("@")[0]}...)`);
+
+    // Aggregate search progress
+    const totalPcEarned = success.reduce((s, r) => s + (r.pcSearch?.earned || 0), 0);
+    const totalPcMax = success.reduce((s, r) => s + (r.pcSearch?.max || 0), 0);
+    const totalMobileEarned = success.reduce((s, r) => s + (r.mobileSearch?.earned || 0), 0);
+    const totalMobileMax = success.reduce((s, r) => s + (r.mobileSearch?.max || 0), 0);
+
+    if (totalPcMax > 0 || totalMobileMax > 0) {
+      block.push("");
+      block.push("  Search Progress");
+      if (totalPcMax > 0) block.push(`  ${pad("PC Search")}${totalPcEarned}/${totalPcMax}`);
+      if (totalMobileMax > 0) block.push(`  ${pad("Mobile Search")}${totalMobileEarned}/${totalMobileMax}`);
+    }
+
+    // Streak info
+    const totalStreak = success.reduce((s, r) => s + (r.streak || 0), 0);
+    const maxStreak = success.reduce((max, r) => Math.max(max, r.streak || 0), 0);
+    if (totalStreak > 0) {
+      block.push("");
+      block.push("  Streaks");
+      block.push(`  ${pad("Avg Streak")}${Math.round(totalStreak / success.length)}`);
+      block.push(`  ${pad("Max Streak")}${maxStreak}`);
+    }
   }
 
   return header()

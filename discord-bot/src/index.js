@@ -1240,7 +1240,21 @@ async function handleRewards(respond, userId, accountsRaw, accountsFile, threads
 
     if (success.length > 0) {
       files.push(textAttachment(
-        success.map(r => `${r.email} | ${r.balance.toLocaleString()} pts | Level: ${r.levelName} | Lifetime: ${r.lifetimePoints.toLocaleString()} | Streak: ${r.streak}`),
+        success.map(r => {
+          const parts = [
+            r.email,
+            `${r.balance.toLocaleString()} pts`,
+            `Level: ${r.levelName}`,
+            `Lifetime: ${r.lifetimePoints.toLocaleString()}`,
+            `Streak: ${r.streak}${r.maxStreak ? `/${r.maxStreak}` : ""}`,
+          ];
+          if (r.pcSearch) parts.push(`PC: ${r.pcSearch.earned}/${r.pcSearch.max}`);
+          if (r.mobileSearch) parts.push(`Mobile: ${r.mobileSearch.earned}/${r.mobileSearch.max}`);
+          if (r.edgeSearch && r.edgeSearch.max > 0) parts.push(`Edge: ${r.edgeSearch.earned}/${r.edgeSearch.max}`);
+          if (r.dailyPoints && r.dailyPoints.max > 0) parts.push(`Daily: ${r.dailyPoints.earned}/${r.dailyPoints.max}`);
+          if (r.redeemGoalName && r.redeemGoalName !== "None set") parts.push(`Goal: ${r.redeemGoalName}`);
+          return parts.join(" | ");
+        }),
         "rewards_balances.txt"
       ));
     }

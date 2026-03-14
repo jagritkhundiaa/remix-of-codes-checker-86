@@ -87,9 +87,22 @@ function isOwner(userId) {
   return userId === config.OWNER_ID;
 }
 
-function isAllowedChannel(channelId) {
-  if (!config.ALLOWED_CHANNEL_ID) return true;
-  return channelId === config.ALLOWED_CHANNEL_ID;
+// ── Channel enforcement ──────────────────────────────────────
+
+const PULLER_CHECKER_CMDS = new Set(["pull", "promopuller", "check", "checker", "claim"]);
+const INBOX_NORMAL_CMDS = new Set(["inboxaio", "rewards", "recover", "captcha", "help", "stats", "search", "purchase", "changer", "wlidset"]);
+
+function getRequiredChannel(cmd) {
+  if (PULLER_CHECKER_CMDS.has(cmd)) return config.ALLOWED_CHANNEL_PULLER;
+  if (INBOX_NORMAL_CMDS.has(cmd)) return config.ALLOWED_CHANNEL_INBOX;
+  return null; // admin commands (auth, deauth, admin, etc.) work in either channel
+}
+
+function checkChannelAccess(channelId, cmd) {
+  const required = getRequiredChannel(cmd);
+  if (!required) return { allowed: true };
+  if (channelId === required) return { allowed: true };
+  return { allowed: false, requiredChannel: required };
 }
 
 function canUse(userId) {
@@ -1469,17 +1482,21 @@ client.on("interactionCreate", async (interaction) => {
 
   if (!interaction.isChatInputCommand()) return;
 
-  // Channel lock enforcement
-  if (!isAllowedChannel(interaction.channelId)) {
-    return interaction.reply({ embeds: [errorEmbed(`Commands are restricted to <#${config.ALLOWED_CHANNEL_ID}>.`)], ephemeral: true });
+  const { commandName, user } = interaction;
+
+  // Per-command channel enforcement
+  const channelCheck = checkChannelAccess(interaction.channelId, commandName);
+  if (!channelCheck.allowed) {
+    return interaction.reply({
+      embeds: [errorEmbed(`This command can only be used in <#${channelCheck.requiredChannel}>.`)],
+      ephemeral: true,
+    });
   }
 
   const respond = (opts) => {
     if (interaction.deferred || interaction.replied) return interaction.editReply(opts);
     return interaction.reply(opts);
   };
-
-  const { commandName, user } = interaction;
 
   // Send welcome on first use (to DMs)
   await sendWelcomeIfNeeded(async (opts) => {
@@ -1649,12 +1666,18 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   if (!message.content.startsWith(config.PREFIX)) return;
 
-  // Channel lock enforcement
-  if (!isAllowedChannel(message.channelId)) return;
 
   const args = message.content.slice(config.PREFIX.length).trim().split(/\s+/);
   const cmd = args.shift()?.toLowerCase();
   if (!cmd) return;
+
+  // Per-command channel enforcement
+  const channelCheck = checkChannelAccess(message.channelId, cmd);
+  if (!channelCheck.allowed) {
+    return message.reply({
+      embeds: [errorEmbed(`This command can only be used in <#${channelCheck.requiredChannel}>.`)],
+    });
+  }
 
   const respond = (opts) => message.reply(opts);
   // Send welcome on first use

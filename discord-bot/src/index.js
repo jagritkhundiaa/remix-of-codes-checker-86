@@ -1667,7 +1667,7 @@ client.on("messageCreate", async (message) => {
   if (!message.content.startsWith(config.PREFIX)) return;
 
   // Channel lock enforcement
-  if (!isAllowedChannel(message.channelId)) return;
+  // Channel lock enforcement removed — handled per-command below
 
   const args = message.content.slice(config.PREFIX.length).trim().split(/\s+/);
   const cmd = args.shift()?.toLowerCase();

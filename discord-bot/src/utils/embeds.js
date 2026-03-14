@@ -794,9 +794,17 @@ const HELP_CATEGORIES = {
 };
 
 function helpOverviewEmbed(prefix) {
-  const catList = Object.entries(HELP_CATEGORIES).map(([, cat]) =>
-    `  - **${cat.label}** -- ${cat.description}`
-  );
+  const sectionLines = [];
+
+  for (const [, section] of Object.entries(HELP_SECTIONS)) {
+    sectionLines.push(`\n**${section.label}**`);
+    for (const catKey of section.categories) {
+      const cat = HELP_CATEGORIES[catKey];
+      if (cat) {
+        sectionLines.push(`  ${cat.emoji}  **${cat.label}** — ${cat.description}`);
+      }
+    }
+  }
 
   return header({ banner: true })
     .setColor(COLORS.PRIMARY)
@@ -804,8 +812,7 @@ function helpOverviewEmbed(prefix) {
     .setDescription([
       `Select a category below to view commands.`,
       `All results are sent to your DMs automatically.`,
-      ``,
-      ...catList,
+      ...sectionLines,
     ].join("\n"));
 }
 
@@ -819,17 +826,27 @@ function helpCategoryEmbed(categoryKey, prefix) {
 }
 
 function helpSelectMenu() {
+  const options = [];
+
+  for (const [, section] of Object.entries(HELP_SECTIONS)) {
+    for (const catKey of section.categories) {
+      const cat = HELP_CATEGORIES[catKey];
+      if (cat) {
+        options.push({
+          label: `${cat.label}`,
+          description: `${section.label.replace(/^-- | --$/g, '')} › ${cat.description}`,
+          value: catKey,
+          emoji: cat.emoji,
+        });
+      }
+    }
+  }
+
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId("help_category")
       .setPlaceholder("Select a category...")
-      .addOptions(
-        Object.entries(HELP_CATEGORIES).map(([key, cat]) => ({
-          label: cat.label,
-          description: cat.description,
-          value: key,
-        }))
-      )
+      .addOptions(options)
   );
 }
 

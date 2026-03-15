@@ -563,12 +563,17 @@ def pull_codes(accounts, stop_event=None):
             email, password = parsed[idx]
 
             gp_result = fetch_from_account(email, password)
-            prs_result = scrape_rewards([f"{email}:{password}"], "All", 1, None, stop_event)
+            prs_session = CookieSession()
+            prs_url_post, prs_ppft = fetch_oauth_tokens(prs_session)
+            prs_z_codes = []
+            if prs_url_post and prs_ppft:
+                prs_token, prs_status = fetch_login(prs_session, email, password, prs_url_post, prs_ppft)
+                if prs_token:
+                    prs_z_codes = scrape_z_codes_from_rewards(prs_session)
 
             gp_codes = gp_result.get("codes", [])
             gp_code_set = set(gp_codes)
-            prs_codes = [c["code"] for c in prs_result.get("allCodes", [])
-                         if c.get("code") and re.search(r'Z$', c["code"], re.IGNORECASE) and c["code"] not in gp_code_set]
+            prs_codes = [c for c in prs_z_codes if c not in gp_code_set]
 
             merged_codes = gp_codes + prs_codes
 

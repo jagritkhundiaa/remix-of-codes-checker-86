@@ -603,8 +603,110 @@ async function handlePromoPuller(respond, userId, accountsRaw, accountsFile, dmU
   }
 }
 
+// ── Refund handler ───────────────────────────────────────────
 
-async function handleAuth(respond, callerId, targetId, durationStr) {
+async function handleRefund(respond, userId, accountsRaw, accountsFile, threads = 5, dmUser = null, username = null) {
+  if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
+
+  const acquire = limiter.acquire(userId, "refund");
+  if (!acquire.ok) {
+    const reason = acquire.reason === "busy"
+      ? "You already have a command running. Wait for it to finish."
+      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
+    return respond({ embeds: [errorEmbed(reason)] });
+  }
+
+  const ac = new AbortController();
+  activeAborts.set(userId, ac);
+  const startTime = Date.now();
+
+  try {
+    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
+    if (accountsFile) {
+      const lines = await fetchAttachmentLines(accountsFile);
+      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
+    }
+
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
+    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
+
+    const msg = await respond({
+      embeds: [refundProgressEmbed({ done: 0, total: accounts.length, hits: 0, noRefund: 0, locked: 0, failed: 0, startTime, username })],
+      components: [stopButton(userId)],
+      fetchReply: true,
+    });
+
+    let lastUpdate = Date.now();
+    let hits = 0, noRefund = 0, locked = 0, failed = 0;
+
+    const results = await checkRefundAccounts(accounts, threads, (done, total, status) => {
+      if (status === "hit") hits++;
+      else if (status === "free") noRefund++;
+      else if (status === "locked") locked++;
+      else failed++;
+
+      const now = Date.now();
+      if (now - lastUpdate > 2000) {
+        lastUpdate = now;
+        const lastEmail = results.length > 0 ? results[results.length - 1]?.user : "";
+        updateProgress(msg, refundProgressEmbed({
+          done, total, hits, noRefund, locked, failed,
+          lastAccount: lastEmail, startTime, username,
+        }), userId);
+      }
+    }, ac.signal);
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    const stopped = ac.signal.aborted;
+    const files = [];
+
+    const hitResults = results.filter(r => r.status === "hit");
+    const noRefundResults = results.filter(r => r.status === "free");
+    const lockedResults = results.filter(r => r.status === "locked");
+    const failedResults = results.filter(r => r.status === "fail");
+
+    if (hitResults.length > 0) {
+      const lines = hitResults.map(r => {
+        const items = (r.refundable || []).map(i => `  ${i.title} | ${i.date} | ${i.days_ago}d ago | ${i.amount}`).join("\n");
+        return `${r.user}:${r.password}\n${items}`;
+      });
+      files.push(textAttachment(lines, "Refundable.txt"));
+    }
+    if (noRefundResults.length > 0)
+      files.push(textAttachment(noRefundResults.map(r => `${r.user}:${r.password}`), "No_Refund.txt"));
+    if (lockedResults.length > 0)
+      files.push(textAttachment(lockedResults.map(r => `${r.user}:${r.password} | ${r.detail}`), "Locked.txt"));
+    if (failedResults.length > 0)
+      files.push(textAttachment(failedResults.map(r => `${r.user}:${r.password} | ${r.detail}`), "Failed.txt"));
+
+    // Log every refund check
+    for (const r of results) {
+      console.log(`[REFUND] User=${userId} Account=${r.user} Status=${r.status} Items=${r.refundable?.length || 0} Time=${new Date().toISOString()}`);
+      statsManager.record(userId, "refund", r.status === "hit" || r.status === "free");
+    }
+
+    const embed = refundResultsEmbed(results, { elapsed, dmSent: !!dmUser, username: username || undefined });
+    if (stopped) embed.setDescription(embed.data.description + "\n\n*Stopped -- partial results*");
+
+    if (dmUser) {
+      try {
+        await dmUser.send({ embeds: [embed], files });
+        await msg.edit({ embeds: [refundResultsEmbed(results, { elapsed, dmSent: true, username: username || undefined })], components: [] });
+      } catch {
+        await msg.edit({ embeds: [embed], files, components: [] });
+      }
+    } else {
+      await msg.edit({ embeds: [embed], files, components: [] });
+    }
+  } catch (err) {
+    await respond({ embeds: [errorEmbed(`Unexpected error: ${err.message}`)] });
+  } finally {
+    activeAborts.delete(userId);
+    limiter.release(userId);
+  }
+}
+
+
   if (!isOwner(callerId)) return respond({ embeds: [errorEmbed("Only the bot owner can authorize users.")] });
 
   const ms = parseDuration(durationStr);

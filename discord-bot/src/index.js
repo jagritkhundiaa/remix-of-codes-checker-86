@@ -406,9 +406,19 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
             username,
           }), userId);
         }
+      } else if (phase === "recheck_start") {
+        // PRS second phase — UI shows recheck message
+        updateProgress(msg, progressEmbed(0, detail.total, "Checking again to make sure nothing was missed..."), userId);
+      } else if (phase === "recheck") {
+        if (now - lastUpdate > 2000) {
+          lastUpdate = now;
+          updateProgress(msg, progressEmbed(detail.done, detail.total, "Checking again to make sure nothing was missed..."), userId);
+        }
       } else if (phase === "validate_start") {
         // Capture fetch results for live display
         if (detail.fetchResults) fetchResultsRef = detail.fetchResults;
+        // Recount totalCodes from fetchResults after PRS merge
+        totalCodesSoFar = fetchResultsRef.reduce((sum, r) => sum + r.codes.length, 0);
         validateCounts = { done: 0, total: detail.total, valid: 0, used: 0, balance: 0, expired: 0, regionLocked: 0, invalid: 0 };
         updateProgress(msg, pullLiveProgressEmbed(fetchResultsRef, validateCounts, { username, startTime }), userId);
       } else if (phase === "validate") {

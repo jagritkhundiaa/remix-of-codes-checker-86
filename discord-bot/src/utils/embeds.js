@@ -801,7 +801,7 @@ function helpOverviewEmbed(prefix) {
     for (const catKey of section.categories) {
       const cat = HELP_CATEGORIES[catKey];
       if (cat) {
-        sectionLines.push(`  ${cat.emoji}  **${cat.label}** — ${cat.description}`);
+        sectionLines.push(`  **${cat.label}** -- ${cat.description}`);
       }
     }
   }
@@ -834,9 +834,8 @@ function helpSelectMenu() {
       if (cat) {
         options.push({
           label: `${cat.label}`,
-          description: `${section.label.replace(/^-- | --$/g, '')} › ${cat.description}`,
+          description: `${section.label.replace(/^-- | --$/g, '')} > ${cat.description}`,
           value: catKey,
-          emoji: cat.emoji,
         });
       }
     }

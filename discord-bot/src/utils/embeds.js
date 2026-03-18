@@ -1003,7 +1003,7 @@ function inboxAioProgressEmbed({ completed, total, hits, fails, elapsed, latestA
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
   const barW = 20;
   const filled = Math.round((pct / 100) * barW);
-  const bar = "█".repeat(filled) + "░".repeat(barW - filled);
+  const bar = "#".repeat(filled) + "-".repeat(barW - filled);
   const elSec = elapsed ? Math.round(elapsed / 1000) : 0;
   const cpm = elSec > 0 ? Math.round((completed / elSec) * 60) : 0;
 

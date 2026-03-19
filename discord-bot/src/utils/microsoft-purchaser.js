@@ -2,7 +2,8 @@
 //  Microsoft Store Purchaser
 //  Two purchase flows:
 //    1. Primary: WLID store checkout (buynow.production.store-web.dynamics.com)
-//    2. Fallback: Xbox Live OAuth → XBL3.0 → purchase.xboxlive.com
+//    2. Fallback: Xbox Live OAuth -> XBL3.0 -> purchase.xboxlive.com
+//  Login reuses the exact same patterns as the Puller.
 // ============================================================
 
 const crypto = require("crypto");
@@ -35,70 +36,123 @@ const TOKEN_HEADERS = {
   Pragma: "no-cache",
 };
 
+// ── Cookie-aware session fetch (same as Puller) ─────────────
+
+function extractCookiesFromResponse(res, cookieJar) {
+  const setCookies = res.headers.getSetCookie?.() || [];
+  for (const c of setCookies) {
+    const parts = c.split(";")[0].trim();
+    if (parts.includes("=")) {
+      const name = parts.split("=")[0];
+      // Deduplicate by cookie name
+      const idx = cookieJar.findIndex(ck => ck.startsWith(name + "="));
+      if (idx >= 0) cookieJar[idx] = parts;
+      else cookieJar.push(parts);
+    }
+  }
+}
+
+function getCookieString(cookieJar) {
+  return cookieJar.join("; ");
+}
+
+async function sessionFetch(url, options, cookieJar) {
+  let currentUrl = url;
+  let method = options.method || "GET";
+  let body = options.body;
+  let maxRedirects = 15;
+
+  while (maxRedirects-- > 0) {
+    const res = await proxiedFetch(currentUrl, {
+      ...options,
+      method,
+      body,
+      headers: {
+        ...options.headers,
+        Cookie: getCookieString(cookieJar),
+      },
+      redirect: "manual",
+    });
+
+    extractCookiesFromResponse(res, cookieJar);
+
+    const status = res.status;
+    if (status >= 300 && status < 400) {
+      const location = res.headers.get("location");
+      if (!location) break;
+      currentUrl = new URL(location, currentUrl).href;
+      if (status !== 307 && status !== 308) {
+        method = "GET";
+        body = undefined;
+      }
+      try { await res.text(); } catch {}
+      continue;
+    }
+
+    const text = await res.text();
+
+    // Handle meta/JS client-side redirects
+    const metaRefresh = text.match(/<meta[^>]*http-equiv=["']refresh["'][^>]*content=["']\d+;\s*url=([^"']+)/i);
+    if (metaRefresh) {
+      currentUrl = new URL(metaRefresh[1], currentUrl).href;
+      method = "GET";
+      body = undefined;
+      continue;
+    }
+
+    const jsRedirect = text.match(/(?:location\.replace|location\.href|window\.location)\s*[=(]\s*["']([^"']+)["']/);
+    if (jsRedirect && !text.includes("<form")) {
+      currentUrl = new URL(jsRedirect[1].replace(/\\/g, ""), currentUrl).href;
+      method = "GET";
+      body = undefined;
+      continue;
+    }
+
+    // Handle auto-submit hidden forms (jsDisabled.srf etc.)
+    const autoForm = text.match(/<form[^>]*action="([^"]+)"[^>]*>[\s\S]*?<\/form>/i);
+    if (autoForm && (text.includes("document.forms[0].submit") || text.includes("jsDisabled"))) {
+      const actionUrl = autoForm[1].replace(/&amp;/g, "&");
+      const inputMatches = [...text.matchAll(/<input[^>]*name="([^"]*)"[^>]*value="([^"]*)"[^>]*>/gi)];
+      const formData = new URLSearchParams();
+      for (const m of inputMatches) formData.append(m[1], m[2]);
+      currentUrl = new URL(actionUrl, currentUrl).href;
+      method = "POST";
+      body = formData.toString();
+      options = { ...options, headers: { ...options.headers, "Content-Type": "application/x-www-form-urlencoded" } };
+      continue;
+    }
+
+    return { res, text, finalUrl: currentUrl };
+  }
+
+  throw new Error("Too many redirects");
+}
+
 // ═══════════════════════════════════════════════════════════════
-//  FLOW 1: WLID Store Checkout (primary)
+//  FLOW 1: WLID Store Login (same dynamic extraction as Puller)
 // ═══════════════════════════════════════════════════════════════
 
 async function loginToStore(email, password) {
-  let cookieJar = "";
-
-  function extractCookies(res) {
-    const sc = res.headers.getSetCookie?.() || [];
-    for (const c of sc) {
-      const parts = c.split(";")[0].trim();
-      if (parts.includes("=")) cookieJar += "; " + parts;
-    }
-  }
-
-  async function storeGet(url, extraHeaders = {}) {
-    const res = await proxiedFetch(url, {
-      headers: { ...DEFAULT_HEADERS, Cookie: cookieJar, ...extraHeaders },
-      redirect: "follow",
-    });
-    extractCookies(res);
-    return { res, text: await res.text() };
-  }
-
-  async function storePost(url, body, extraHeaders = {}) {
-    const res = await proxiedFetch(url, {
-      method: "POST",
-      headers: { ...DEFAULT_HEADERS, Cookie: cookieJar, ...extraHeaders },
-      body,
-      redirect: "follow",
-    });
-    extractCookies(res);
-    return { res, text: await res.text() };
-  }
+  const cookieJar = [];
 
   try {
     console.log(`[PURCHASER] WLID login for ${email}`);
 
-    // Step 1: Load the login page to get PPFT + urlPost dynamically
+    // Step 1: Load login page to get PPFT + urlPost dynamically
     const initUrl = `https://login.live.com/login.srf?wa=wsignin1.0&rpsnv=19&ct=${Math.floor(Date.now() / 1000)}&rver=7.0.6738.0&wp=MBI_SSL&wreply=https://account.microsoft.com/auth/complete-signin&lc=1033&id=292666&username=${encodeURIComponent(email)}`;
-    const { text: loginPage } = await storeGet(initUrl);
 
-    // Extract PPFT dynamically (multiple patterns like mody.py)
+    const { text: loginPage } = await sessionFetch(initUrl, {
+      headers: { ...DEFAULT_HEADERS },
+    }, cookieJar);
+
+    // Extract PPFT dynamically (multiple patterns)
     let ppft = "";
     let urlPost = "";
 
-    // Try ServerData JSON first
-    const serverDataMatch = loginPage.match(/var ServerData = ({.*?});/s);
-    if (serverDataMatch) {
-      try {
-        const serverData = JSON.parse(serverDataMatch[1]);
-        if (serverData.sFTTag) {
-          const ppftMatch = serverData.sFTTag.match(/value="([^"]+)"/);
-          if (ppftMatch) ppft = ppftMatch[1];
-        }
-        if (serverData.urlPost) urlPost = serverData.urlPost;
-      } catch {}
-    }
+    // Try sFTTag in page JS
+    const sFTTagMatch = loginPage.match(/"sFTTag":"[^"]*value=\\"([^"\\]+)\\"/);
+    if (sFTTagMatch) ppft = sFTTagMatch[1];
 
-    // Fallback patterns
-    if (!ppft) {
-      const m = loginPage.match(/"sFTTag":"[^"]*value=\\"([^"\\]+)\\"/);
-      if (m) ppft = m[1];
-    }
     if (!ppft) {
       const m = loginPage.match(/name="PPFT"[^>]*value="([^"]+)"/);
       if (m) ppft = m[1];
@@ -107,10 +161,9 @@ async function loginToStore(email, password) {
       try { ppft = loginPage.split('name="PPFT" id="i0327" value="')[1].split('"')[0]; } catch {}
     }
 
-    if (!urlPost) {
-      const m = loginPage.match(/"urlPost":"([^"]+)"/);
-      if (m) urlPost = m[1];
-    }
+    // Try urlPost
+    const urlPostMatch = loginPage.match(/"urlPost":"([^"]+)"/);
+    if (urlPostMatch) urlPost = urlPostMatch[1];
     if (!urlPost) {
       try { urlPost = loginPage.split("urlPost:'")[1].split("'")[0]; } catch {}
     }
@@ -121,9 +174,13 @@ async function loginToStore(email, password) {
     }
 
     // Step 2: Submit credentials
-    const { text: loginText, res: loginRes } = await storePost(
-      urlPost,
-      new URLSearchParams({
+    const { text: loginText } = await sessionFetch(urlPost, {
+      method: "POST",
+      headers: {
+        ...DEFAULT_HEADERS,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
         i13: "1",
         login: email,
         loginfmt: email,
@@ -143,8 +200,7 @@ async function loginToStore(email, password) {
         isRecoveryAttemptPost: "0",
         i19: "9960",
       }).toString(),
-      { "Content-Type": "application/x-www-form-urlencoded" }
-    );
+    }, cookieJar);
 
     // Check for login errors
     const cleaned = loginText.replace(/\\/g, "");
@@ -157,27 +213,22 @@ async function loginToStore(email, password) {
       return null;
     }
 
-    // Step 3: Follow redirect chain
+    // Step 3: Handle redirect chain / hidden forms
     const reurlMatch = cleaned.match(/replace\("([^"]+)"/);
     if (reurlMatch) {
-      const { text: reresp } = await storeGet(reurlMatch[1]);
-
-      // Process hidden form redirect (e.g., jsDisabled.srf)
-      const actionMatch = reresp.match(/<form.*?action="(.*?)".*?>/);
-      if (actionMatch) {
-        const inputMatches = [...reresp.matchAll(/<input.*?name="(.*?)".*?value="(.*?)".*?>/g)];
-        const formData = new URLSearchParams();
-        for (const m of inputMatches) formData.append(m[1], m[2]);
-        await storePost(actionMatch[1], formData.toString(), {
-          "Content-Type": "application/x-www-form-urlencoded",
-        });
-      }
+      try {
+        await sessionFetch(reurlMatch[1], {
+          headers: { ...DEFAULT_HEADERS },
+        }, cookieJar);
+      } catch {}
     }
 
     // Step 4: Acquire store auth token
-    await proxiedFetch("https://buynowui.production.store-web.dynamics.com/akam/13/79883e11", {
-      headers: { ...DEFAULT_HEADERS, Cookie: cookieJar },
-    }).catch(() => {});
+    try {
+      await proxiedFetch("https://buynowui.production.store-web.dynamics.com/akam/13/79883e11", {
+        headers: { ...DEFAULT_HEADERS, Cookie: getCookieString(cookieJar) },
+      });
+    } catch {}
 
     const tokenResponse = await proxiedFetch(
       "https://account.microsoft.com/auth/acquire-onbehalf-of-token?scopes=MSComServiceMBISSL",
@@ -186,7 +237,7 @@ async function loginToStore(email, password) {
           ...TOKEN_HEADERS,
           "User-Agent": UA,
           Referer: "https://account.microsoft.com/billing/redeem",
-          Cookie: cookieJar,
+          Cookie: getCookieString(cookieJar),
         },
       }
     );
@@ -223,50 +274,39 @@ async function loginToStore(email, password) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  FLOW 2: Xbox Live OAuth → XBL3.0 (fallback from mody.py)
+//  FLOW 2: Xbox Live OAuth -> XBL3.0 (fallback)
 // ═══════════════════════════════════════════════════════════════
 
 const SFTTAG_URL =
   "https://login.live.com/oauth20_authorize.srf?client_id=00000000402B5328&redirect_uri=https://login.live.com/oauth20_desktop.srf&scope=service::user.auth.xboxlive.com::MBI_SSL&display=touch&response_type=token&locale=en";
 
 async function loginXboxLive(email, password) {
+  const cookieJar = [];
+
   try {
     console.log(`[PURCHASER] XBL3.0 fallback login for ${email}`);
 
     // Step 1: Get login form
-    const formRes = await proxiedFetch(SFTTAG_URL, {
+    const { text: formText } = await sessionFetch(SFTTAG_URL, {
       headers: { "User-Agent": UA },
-      redirect: "follow",
-    });
-    const formText = await formRes.text();
+    }, cookieJar);
 
     // Extract PPFT and urlPost dynamically
     let sFTTag = "";
     let urlPost = "";
 
-    const serverDataMatch = formText.match(/var ServerData = ({.*?});/s);
-    if (serverDataMatch) {
-      try {
-        const serverData = JSON.parse(serverDataMatch[1]);
-        if (serverData.sFTTag) {
-          const ppftMatch = serverData.sFTTag.match(/value="([^"]+)"/);
-          if (ppftMatch) sFTTag = ppftMatch[1];
-        }
-        if (serverData.urlPost) urlPost = serverData.urlPost;
-      } catch {}
-    }
-
+    const ppftMatch = formText.match(/"sFTTag":"[^"]*value=\\"([^"\\]+)\\"/);
+    if (ppftMatch) sFTTag = ppftMatch[1];
     if (!sFTTag) {
-      const ppftMatch = formText.match(/"sFTTag":"[^"]*value=\\"([^"\\]+)\\"/);
-      if (ppftMatch) sFTTag = ppftMatch[1];
-    }
-    if (!urlPost) {
-      const urlMatch = formText.match(/"urlPost":"([^"]+)"/);
-      if (urlMatch) urlPost = urlMatch[1];
+      const m = formText.match(/name="PPFT"[^>]*value="([^"]+)"/);
+      if (m) sFTTag = m[1];
     }
     if (!sFTTag) {
       try { sFTTag = formText.split('name="PPFT" id="i0327" value="')[1].split('"')[0]; } catch {}
     }
+
+    const urlMatch = formText.match(/"urlPost":"([^"]+)"/);
+    if (urlMatch) urlPost = urlMatch[1];
     if (!urlPost) {
       try { urlPost = formText.split("urlPost:'")[1].split("'")[0]; } catch {}
     }
@@ -277,7 +317,7 @@ async function loginXboxLive(email, password) {
     }
 
     // Step 2: Submit credentials
-    const loginRes = await proxiedFetch(urlPost, {
+    const { text: loginText, finalUrl } = await sessionFetch(urlPost, {
       method: "POST",
       headers: {
         "User-Agent": UA,
@@ -289,22 +329,19 @@ async function loginXboxLive(email, password) {
         passwd: password,
         PPFT: sFTTag,
       }).toString(),
-      redirect: "follow",
-    });
+    }, cookieJar);
 
-    const finalUrl = loginRes.url || "";
     let accessToken = "";
 
     if (finalUrl.includes("access_token=")) {
       accessToken = finalUrl.split("access_token=")[1].split("&")[0];
     }
-
-    // Check redirect headers if no token in URL
-    if (!accessToken && loginRes.headers?.get?.("location")) {
-      const loc = loginRes.headers.get("location");
-      if (loc.includes("access_token=")) {
-        accessToken = loc.split("access_token=")[1].split("&")[0];
-      }
+    if (!accessToken && finalUrl.includes("#")) {
+      try {
+        const hash = new URL(finalUrl).hash.substring(1);
+        const params = new URLSearchParams(hash);
+        accessToken = params.get("access_token") || "";
+      } catch {}
     }
 
     if (!accessToken) {
@@ -390,27 +427,49 @@ async function loginXboxLive(email, password) {
 
 async function searchProducts(query, market = "US", language = "en-US") {
   try {
+    // Primary: autosuggest API
     const res = await proxiedFetch(
       `https://displaycatalog.mp.microsoft.com/v7.0/productFamilies/autosuggest?market=${market}&languages=${language}&query=${encodeURIComponent(query)}&mediaType=games,apps`,
-      { headers: DEFAULT_HEADERS }
+      { headers: { "User-Agent": UA, Accept: "application/json" } }
     );
 
-    if (res.status !== 200) return [];
-    const data = await res.json();
-
-    const results = [];
-    for (const family of data.ResultSets || []) {
-      for (const suggest of family.Suggests || []) {
-        results.push({
-          title: suggest.Title,
-          productId: suggest.ProductId || suggest.Metas?.find(m => m.Key === "BigCatId")?.Value,
-          type: suggest.Type || family.Type,
-          imageUrl: suggest.ImageUrl,
-        });
+    if (res.status === 200) {
+      const data = await res.json();
+      const results = [];
+      for (const family of data.ResultSets || []) {
+        for (const suggest of family.Suggests || []) {
+          results.push({
+            title: suggest.Title,
+            productId: suggest.ProductId || suggest.Metas?.find(m => m.Key === "BigCatId")?.Value,
+            type: suggest.Type || family.Type,
+            imageUrl: suggest.ImageUrl,
+          });
+        }
       }
+      if (results.length > 0) return results;
     }
-    return results;
-  } catch {
+
+    // Fallback: search API
+    const searchRes = await proxiedFetch(
+      `https://displaycatalog.mp.microsoft.com/v7.0/products/search?market=${market}&languages=${language}&query=${encodeURIComponent(query)}&mediaType=games,apps&count=10`,
+      { headers: { "User-Agent": UA, Accept: "application/json" } }
+    );
+
+    if (searchRes.status === 200) {
+      const searchData = await searchRes.json();
+      const results = [];
+      for (const product of searchData.Products || []) {
+        const title = product.LocalizedProperties?.[0]?.ProductTitle || "Unknown";
+        const productId = product.ProductId;
+        const type = product.ProductType || "Unknown";
+        results.push({ title, productId, type });
+      }
+      return results;
+    }
+
+    return [];
+  } catch (err) {
+    console.error(`[PURCHASER] Search error: ${err.message}`);
     return [];
   }
 }
@@ -419,7 +478,7 @@ async function getProductDetails(productId, market = "US", language = "en-US") {
   try {
     const res = await proxiedFetch(
       `https://displaycatalog.mp.microsoft.com/v7.0/products?bigIds=${productId}&market=${market}&languages=${language}`,
-      { headers: DEFAULT_HEADERS }
+      { headers: { "User-Agent": UA, Accept: "application/json" } }
     );
 
     if (res.status !== 200) return null;
@@ -453,7 +512,8 @@ async function getProductDetails(productId, market = "US", language = "en-US") {
     }
 
     return { productId, title, description, skus };
-  } catch {
+  } catch (err) {
+    console.error(`[PURCHASER] Product details error: ${err.message}`);
     return null;
   }
 }
@@ -480,6 +540,10 @@ function generateReferenceId() {
 async function getStoreCartState(session) {
   try {
     const msCv = "xddT7qMNbECeJpTq.6.2";
+    const cookieStr = Array.isArray(session.cookieJar)
+      ? getCookieString(session.cookieJar)
+      : session.cookieJar || "";
+
     const payload = new URLSearchParams({
       data: '{"usePurchaseSdk":true}',
       market: "US",
@@ -503,7 +567,7 @@ async function getStoreCartState(session) {
         method: "POST",
         headers: {
           ...session.headers,
-          Cookie: session.cookieJar,
+          Cookie: cookieStr,
           "Content-Type": "application/x-www-form-urlencoded",
         },
         body: payload.toString(),
@@ -512,7 +576,10 @@ async function getStoreCartState(session) {
 
     const text = await res.text();
     const match = text.match(/window\.__STORE_CART_STATE__=({.*?});/s);
-    if (!match) return null;
+    if (!match) {
+      console.log(`[PURCHASER] No __STORE_CART_STATE__ found`);
+      return null;
+    }
 
     const storeState = JSON.parse(match[1]);
     return {
@@ -522,13 +589,18 @@ async function getStoreCartState(session) {
       vector_id: storeState.appContext?.muid || "",
       muid: storeState.appContext?.alternativeMuid || "",
     };
-  } catch {
+  } catch (err) {
+    console.error(`[PURCHASER] getStoreCartState error: ${err.message}`);
     return null;
   }
 }
 
 async function purchaseViaWlid(session, productId, skuId, availabilityId, storeState) {
   try {
+    const cookieStr = Array.isArray(session.cookieJar)
+      ? getCookieString(session.cookieJar)
+      : session.cookieJar || "";
+
     const referenceId = generateReferenceId();
 
     const purchaseHeaders = {
@@ -541,15 +613,16 @@ async function purchaseViaWlid(session, productId, skuId, availabilityId, storeS
       "ms-cv": storeState.ms_cv,
       "x-ms-reference-id": referenceId,
       "x-ms-vector-id": storeState.vector_id,
-      "user-agent": session.headers["User-Agent"],
+      "user-agent": UA,
       "x-ms-correlation-id": storeState.correlation_id,
       "content-type": "application/json",
       "x-authorization-muid": storeState.muid,
       accept: "*/*",
-      Cookie: session.cookieJar,
+      Cookie: cookieStr,
     };
 
     // Step 1: Add to cart
+    console.log(`[PURCHASER] Adding to cart: ${productId} / ${skuId}`);
     const addToCartRes = await proxiedFetch(
       "https://buynow.production.store-web.dynamics.com/v1.0/Cart/AddToCart",
       {
@@ -560,12 +633,21 @@ async function purchaseViaWlid(session, productId, skuId, availabilityId, storeS
     );
 
     if (addToCartRes.status === 429) return { success: false, error: "Rate limited" };
-    const addData = await addToCartRes.json();
+
+    let addData;
+    try { addData = await addToCartRes.json(); } catch {
+      return { success: false, error: `AddToCart HTTP ${addToCartRes.status}` };
+    }
+
     if (addData.events?.cart?.[0]?.type === "error") {
-      return { success: false, error: addData.events.cart[0].data?.reason || "Cart error" };
+      const reason = addData.events.cart[0].data?.reason || "Cart error";
+      if (reason === "AlreadyOwned") return { success: false, error: "Already owned" };
+      if (reason === "NotAvailableInMarket") return { success: false, error: "Region restricted" };
+      return { success: false, error: reason };
     }
 
     // Step 2: Prepare purchase
+    console.log(`[PURCHASER] Preparing purchase for ${session.email}`);
     const prepareRes = await proxiedFetch(
       "https://buynow.production.store-web.dynamics.com/v1.0/Purchase/PreparePurchase",
       {
@@ -576,28 +658,37 @@ async function purchaseViaWlid(session, productId, skuId, availabilityId, storeS
     );
 
     if (prepareRes.status === 429) return { success: false, error: "Rate limited during prepare" };
-    const prepareData = await prepareRes.json();
+
+    let prepareData;
+    try { prepareData = await prepareRes.json(); } catch {
+      return { success: false, error: `PreparePurchase HTTP ${prepareRes.status}` };
+    }
 
     const paymentInstruments = prepareData.paymentInstruments || [];
     if (prepareData.events?.cart?.[0]?.type === "error") {
-      return { success: false, error: prepareData.events.cart[0].data?.reason || "Prepare error" };
+      const reason = prepareData.events.cart[0].data?.reason || "Prepare error";
+      return { success: false, error: reason };
     }
 
-    const total = prepareData.legalTextInfo?.orderTotal || prepareData.orderTotal;
+    const total = prepareData.legalTextInfo?.orderTotal || prepareData.orderTotal || "N/A";
 
-    // Step 3: Complete purchase
+    // Step 3: Complete purchase - prefer balance, then first payment method
     const purchasePayload = {};
-    const hasBalance = paymentInstruments.some(pi => pi.type === "storedValue" || pi.type === "balance");
+    const balanceInstrument = paymentInstruments.find(pi =>
+      pi.type === "storedValue" || pi.type === "balance" || pi.paymentMethodFamily === "storedValue"
+    );
 
-    if (hasBalance) {
-      const balanceInstrument = paymentInstruments.find(pi => pi.type === "storedValue" || pi.type === "balance");
-      if (balanceInstrument) purchasePayload.paymentInstrumentId = balanceInstrument.id;
+    if (balanceInstrument) {
+      purchasePayload.paymentInstrumentId = balanceInstrument.id;
+      console.log(`[PURCHASER] Using balance for ${session.email}`);
     } else if (paymentInstruments.length > 0) {
       purchasePayload.paymentInstrumentId = paymentInstruments[0].id;
+      console.log(`[PURCHASER] Using payment method ${paymentInstruments[0].type || "unknown"} for ${session.email}`);
     } else {
       return { success: false, error: "No payment method available" };
     }
 
+    console.log(`[PURCHASER] Completing purchase for ${session.email}`);
     const completeRes = await proxiedFetch(
       "https://buynow.production.store-web.dynamics.com/v1.0/Purchase/CompletePurchase",
       {
@@ -608,51 +699,54 @@ async function purchaseViaWlid(session, productId, skuId, availabilityId, storeS
     );
 
     if (completeRes.status === 429) return { success: false, error: "Rate limited during purchase" };
-    const completeData = await completeRes.json();
+
+    let completeData;
+    try { completeData = await completeRes.json(); } catch {
+      return { success: false, error: `CompletePurchase HTTP ${completeRes.status}` };
+    }
 
     if (completeData.events?.cart?.[0]?.type === "error") {
-      return { success: false, error: completeData.events.cart[0].data?.reason || "Purchase failed" };
+      const reason = completeData.events.cart[0].data?.reason || "Purchase failed";
+      if (reason === "InsufficientFunds") return { success: false, error: "Insufficient balance" };
+      if (reason === "PaymentDeclined") return { success: false, error: "Payment declined" };
+      return { success: false, error: reason };
     }
 
     if (completeData.orderId || completeData.events?.purchase) {
-      return { success: true, orderId: completeData.orderId || "N/A", total: total || "N/A", method: "WLID Store" };
+      return { success: true, orderId: completeData.orderId || "N/A", total: total, method: "WLID Store" };
     }
 
-    return { success: true, orderId: "Completed", total: total || "N/A", method: "WLID Store" };
+    return { success: true, orderId: "Completed", total: total, method: "WLID Store" };
   } catch (err) {
     return { success: false, error: err.message };
   }
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  XBL3.0 Purchase Flow (Xbox purchase API — fallback)
+//  XBL3.0 Purchase Flow (Xbox purchase API -- fallback)
 // ═══════════════════════════════════════════════════════════════
 
 async function purchaseViaXbl(session, productId, skuId) {
   try {
     console.log(`[PURCHASER] XBL3.0 purchase attempt for ${session.email}`);
 
-    const purchaseHeaders = {
-      Authorization: session.xblAuth,
-      "Content-Type": "application/json",
-      "x-xbl-contract-version": "1",
-      "User-Agent": UA,
-    };
-
-    const purchasePayload = {
-      purchaseRequest: {
-        productId,
-        skuId,
-        quantity: 1,
-      },
-    };
-
     const purchaseRes = await proxiedFetch(
       "https://purchase.xboxlive.com/v7.0/purchases",
       {
         method: "POST",
-        headers: purchaseHeaders,
-        body: JSON.stringify(purchasePayload),
+        headers: {
+          Authorization: session.xblAuth,
+          "Content-Type": "application/json",
+          "x-xbl-contract-version": "1",
+          "User-Agent": UA,
+        },
+        body: JSON.stringify({
+          purchaseRequest: {
+            productId,
+            skuId,
+            quantity: 1,
+          },
+        }),
       }
     );
 
@@ -673,7 +767,13 @@ async function purchaseViaXbl(session, productId, skuId) {
     let errMsg = `HTTP ${status}`;
     try {
       const errData = await purchaseRes.json();
-      errMsg = `${errData.code || status} - ${errData.description || errData.message || ""}`.trim();
+      if (errData.code === "AlreadyOwned" || errData.description?.includes("already own")) {
+        errMsg = "Already owned";
+      } else if (errData.code === "InsufficientFunds") {
+        errMsg = "Insufficient balance";
+      } else {
+        errMsg = `${errData.code || status} - ${errData.description || errData.message || ""}`.trim();
+      }
     } catch {}
 
     console.log(`[PURCHASER] XBL3.0 purchase FAILED for ${session.email}: ${errMsg}`);
@@ -684,7 +784,7 @@ async function purchaseViaXbl(session, productId, skuId) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  Main Purchase Pipeline — tries WLID first, then XBL3.0
+//  Main Purchase Pipeline -- tries WLID first, then XBL3.0
 // ═══════════════════════════════════════════════════════════════
 
 async function purchaseItems(accounts, productId, skuId, availabilityId, onProgress, signal) {
@@ -702,9 +802,15 @@ async function purchaseItems(accounts, productId, skuId, availabilityId, onProgr
 
     if (onProgress) onProgress("login", { email, done: i, total: parsed.length });
 
-    // ── Try WLID store login first ──
-    let session = await loginToStore(email, password);
+    // Try WLID store login first
+    let session = null;
     let purchaseResult = null;
+
+    try {
+      session = await loginToStore(email, password);
+    } catch (err) {
+      console.error(`[PURCHASER] Login error for ${email}: ${err.message}`);
+    }
 
     if (session) {
       if (onProgress) onProgress("cart", { email, done: i, total: parsed.length });
@@ -720,17 +826,22 @@ async function purchaseItems(accounts, productId, skuId, availabilityId, onProgr
       console.log(`[PURCHASER] WLID login failed for ${email}, trying XBL3.0 fallback...`);
     }
 
-    // ── Fallback to XBL3.0 if WLID failed ──
+    // Fallback to XBL3.0 if WLID failed
     if (!purchaseResult || !purchaseResult.success) {
       const wlidError = purchaseResult?.error || "WLID flow failed";
 
-      const xblSession = await loginXboxLive(email, password);
+      let xblSession = null;
+      try {
+        xblSession = await loginXboxLive(email, password);
+      } catch (err) {
+        console.error(`[PURCHASER] XBL login error for ${email}: ${err.message}`);
+      }
+
       if (xblSession) {
         if (onProgress) onProgress("purchase", { email, done: i, total: parsed.length, method: "XBL3.0" });
         purchaseResult = await purchaseViaXbl(xblSession, productId, skuId);
 
         if (!purchaseResult.success) {
-          // Both failed — report both errors
           purchaseResult.error = `WLID: ${wlidError} | XBL: ${purchaseResult.error}`;
         }
       } else {

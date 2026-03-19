@@ -1707,6 +1707,7 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     else if (commandName === "search") {
+      await interaction.deferReply();
       const query = interaction.options.getString("query");
       await handleSearch(respond, query);
     }

@@ -60,6 +60,12 @@ def extract_all_inputs(text, pattern):
     return re.findall(pattern, text, re.DOTALL)
 
 
+def log_step(email_short, step, detail=""):
+    tag = detail if detail else "ok"
+    with lock:
+        print(f"  | {email_short:<30} | step {step}/10 | {tag}")
+
+
 def progress_bar(current, total, width=30):
     if total == 0:
         return "[" + "-" * width + "]"
@@ -80,32 +86,44 @@ def print_header():
 
 
 def print_separator():
-    print("  " + "-" * 43)
+    print("  " + "-" * 55)
 
 
-def login(session, email, password):
-    r = session.get(
-        "https://account.microsoft.com/billing/redeem",
-        headers={**HEADERS, "Referer": "https://account.microsoft.com/"},
-        allow_redirects=True, timeout=30,
-    )
+def login(session, email, password, email_short):
+    # step 1 - navigate to billing/redeem
+    log_step(email_short, 1, "loading redeem page")
+    try:
+        r = session.get(
+            "https://account.microsoft.com/billing/redeem",
+            headers={**HEADERS, "Referer": "https://account.microsoft.com/"},
+            allow_redirects=True, timeout=30,
+        )
+    except Exception as ex:
+        return None, f"NETWORK_ERROR (step1: {ex})"
     text = r.text
 
+    # step 2 - extract redirect url
+    log_step(email_short, 2, "extracting redirect url")
     rurl_match = extract_pattern(text, r'"urlPost":"([^"]+)"')
     if not rurl_match:
-        return None, "Could not extract redirect URL"
+        return None, "FAILED (no redirect url)"
 
     rurl = "https://login.microsoftonline.com" + decode_json_string(rurl_match)
-    r = session.get(
-        rurl,
-        headers={**HEADERS, "Referer": "https://account.microsoft.com/"},
-        allow_redirects=True, timeout=30,
-    )
+    try:
+        r = session.get(
+            rurl,
+            headers={**HEADERS, "Referer": "https://account.microsoft.com/"},
+            allow_redirects=True, timeout=30,
+        )
+    except Exception as ex:
+        return None, f"NETWORK_ERROR (step2: {ex})"
     text = r.text
 
+    # step 3 - extract AAD url
+    log_step(email_short, 3, "extracting AAD url")
     furl_match = extract_pattern(text, r'urlGoToAADError":"([^"]+)"')
     if not furl_match:
-        return None, "Could not extract AAD URL"
+        return None, "FAILED (no AAD url)"
 
     furl = decode_json_string(furl_match)
     furl = furl.replace(
@@ -114,46 +132,68 @@ def login(session, email, password):
         f"&login_hint={urllib.parse.quote(email)}",
     )
 
-    r = session.get(
-        furl,
-        headers={**HEADERS, "Referer": "https://login.microsoftonline.com/"},
-        allow_redirects=True, timeout=30,
-    )
+    # step 4 - load login form
+    log_step(email_short, 4, "loading login form")
+    try:
+        r = session.get(
+            furl,
+            headers={**HEADERS, "Referer": "https://login.microsoftonline.com/"},
+            allow_redirects=True, timeout=30,
+        )
+    except Exception as ex:
+        return None, f"NETWORK_ERROR (step4: {ex})"
     text = r.text
 
+    # extract PPFT - try multiple patterns like JS
     ppft = None
+    # JS order: value=\\?"..." first, then name="PPFT" patterns
     for pat in [
+        r'value=\\?"([^"\\]+)\\?"',
         r'name="PPFT"[^>]+value="([^"]+)"',
         r'value="([^"]+)"[^>]+name="PPFT"',
-        r'value=\\?"([^"\\]+)\\?"',
     ]:
         ppft = extract_pattern(text, pat)
         if ppft:
             break
     if not ppft:
+        # try with backslashes stripped like JS does
+        cleaned = text.replace("\\", "")
+        for pat in [
+            r'value="([^"]+)"',
+            r'name="PPFT"[^>]+value="([^"]+)"',
+        ]:
+            ppft = extract_pattern(cleaned, pat)
+            if ppft:
+                break
+    if not ppft:
         if "captcha" in text.lower() or "hip_challenge" in text.lower():
             return None, "CAPTCHA_REQUIRED"
-        return None, "Could not extract PPFT"
+        return None, "FAILED (no PPFT)"
 
     url_post = extract_pattern(text, r'"urlPost":"([^"]+)"')
     if not url_post:
         url_post = extract_pattern(text, r"urlPost:'([^']+)'")
     if not url_post:
-        return None, "Could not extract urlPost"
+        return None, "FAILED (no urlPost)"
 
+    # step 5 - submit credentials
+    log_step(email_short, 5, "submitting credentials")
     login_data = {
         "login": email, "loginfmt": email,
         "passwd": password, "PPFT": ppft,
     }
-    r = session.post(
-        url_post, data=login_data,
-        headers={
-            **HEADERS,
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Referer": furl, "Origin": "https://login.live.com",
-        },
-        allow_redirects=True, timeout=30,
-    )
+    try:
+        r = session.post(
+            url_post, data=login_data,
+            headers={
+                **HEADERS,
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": furl, "Origin": "https://login.live.com",
+            },
+            allow_redirects=True, timeout=30,
+        )
+    except Exception as ex:
+        return None, f"NETWORK_ERROR (step5: {ex})"
     login_text = r.text.replace("\\", "")
 
     if "Your account or password is incorrect" in login_text or "sErrTxt" in login_text:
@@ -162,56 +202,78 @@ def login(session, email, password):
     if "captcha" in login_text.lower() or "hip_challenge" in login_text.lower():
         return None, "CAPTCHA_REQUIRED"
 
+    # step 6 - extract second sFT
+    log_step(email_short, 6, "extracting second sFT")
     ppft2 = extract_pattern(login_text, r'"sFT":"([^"]+)"')
     if not ppft2:
         action_url = extract_pattern(login_text, r'<form[^>]*action="([^"]+)"')
-        if action_url and "privacynotice" in action_url:
+        if action_url and "privacynotice" in (action_url or ""):
+            log_step(email_short, 6, "handling privacy notice")
             inputs = extract_all_inputs(
                 login_text,
                 r'<input[^>]+type="hidden"[^>]+name="([^"]+)"[^>]+value="([^"]*)"',
             )
             if inputs:
                 form_data = {n: v for n, v in inputs}
-                r = session.post(
-                    action_url, data=form_data,
-                    headers={**HEADERS, "Content-Type": "application/x-www-form-urlencoded"},
-                    allow_redirects=True, timeout=30,
-                )
-                redirect_m = re.search(r"ucis\.RedirectUrl\s*=\s*'([^']+)'", r.text)
-                if redirect_m:
-                    redir = redirect_m.group(1).replace("u0026", "&").replace("\\&", "&")
-                    r = session.get(redir, headers=HEADERS, allow_redirects=True, timeout=30)
-                    login_text = r.text.replace("\\", "")
+                try:
+                    r = session.post(
+                        action_url, data=form_data,
+                        headers={**HEADERS, "Content-Type": "application/x-www-form-urlencoded"},
+                        allow_redirects=True, timeout=30,
+                    )
+                except Exception:
+                    pass
+                else:
+                    redirect_m = re.search(r"ucis\.RedirectUrl\s*=\s*'([^']+)'", r.text)
+                    if redirect_m:
+                        redir = redirect_m.group(1).replace("u0026", "&").replace("\\&", "&")
+                        try:
+                            r = session.get(redir, headers=HEADERS, allow_redirects=True, timeout=30)
+                            login_text = r.text.replace("\\", "")
+                        except Exception:
+                            pass
         ppft2 = extract_pattern(login_text, r'"sFT":"([^"]+)"')
 
     if not ppft2:
-        return None, "Could not extract second sFT"
+        return None, "FAILED (no second sFT)"
 
+    # step 7 - final login post
+    log_step(email_short, 7, "final login")
     lurl = extract_pattern(login_text, r'"urlPost":"([^"]+)"')
     if not lurl:
-        return None, "Could not extract final login URL"
+        return None, "FAILED (no final login url)"
 
     final_data = {
         "LoginOptions": "1", "type": "28", "ctx": "",
         "hpgrequestid": "", "PPFT": ppft2, "canary": "",
     }
-    r = session.post(
-        lurl, data=final_data,
-        headers={**HEADERS, "Content-Type": "application/x-www-form-urlencoded"},
-        allow_redirects=True, timeout=30,
-    )
+    try:
+        r = session.post(
+            lurl, data=final_data,
+            headers={**HEADERS, "Content-Type": "application/x-www-form-urlencoded"},
+            allow_redirects=True, timeout=30,
+        )
+    except Exception as ex:
+        return None, f"NETWORK_ERROR (step7: {ex})"
     finish_text = r.text
 
+    # step 8 - follow replace url
+    log_step(email_short, 8, "following redirect")
     reurl = extract_pattern(finish_text, r'replace\("([^"]+)"\)')
     reresp = finish_text
     if reurl:
-        r = session.get(
-            reurl,
-            headers={**HEADERS, "Referer": "https://login.live.com/"},
-            allow_redirects=True, timeout=30,
-        )
-        reresp = r.text
+        try:
+            r = session.get(
+                reurl,
+                headers={**HEADERS, "Referer": "https://login.live.com/"},
+                allow_redirects=True, timeout=30,
+            )
+            reresp = r.text
+        except Exception:
+            pass
 
+    # step 9 - submit final form
+    log_step(email_short, 9, "submitting final form")
     action_m = extract_pattern(reresp, r'<form[^>]*action="([^"]+)"')
     if action_m and "javascript" not in action_m:
         inputs = extract_all_inputs(
@@ -224,63 +286,73 @@ def login(session, email, password):
             inputs = [(n, v) for v, n in raw]
         if inputs:
             form_data = {n: v for n, v in inputs}
-            session.post(
-                action_m, data=form_data,
-                headers={**HEADERS, "Content-Type": "application/x-www-form-urlencoded"},
-                allow_redirects=True, timeout=30,
-            )
+            try:
+                session.post(
+                    action_m, data=form_data,
+                    headers={**HEADERS, "Content-Type": "application/x-www-form-urlencoded"},
+                    allow_redirects=True, timeout=30,
+                )
+            except Exception:
+                pass
 
     return session, None
 
 
-def extract_token(session):
-    r = session.get(
-        "https://account.microsoft.com/auth/acquire-onbehalf-of-token"
-        "?scopes=MSComServiceMBISSL",
-        headers={
-            **TOKEN_HEADERS,
-            "User-Agent": HEADERS["User-Agent"],
-            "Referer": "https://account.microsoft.com/billing/redeem",
-        },
-        timeout=30,
-    )
+def extract_token(session, email_short):
+    log_step(email_short, 10, "extracting token")
+    try:
+        r = session.get(
+            "https://account.microsoft.com/auth/acquire-onbehalf-of-token"
+            "?scopes=MSComServiceMBISSL",
+            headers={
+                **TOKEN_HEADERS,
+                "User-Agent": HEADERS["User-Agent"],
+                "Referer": "https://account.microsoft.com/billing/redeem",
+            },
+            timeout=30,
+        )
+    except Exception as ex:
+        return None, f"NETWORK_ERROR (token: {ex})"
+
     try:
         data = r.json()
     except Exception:
-        return None, "Invalid token response"
+        return None, "FAILED (invalid token response)"
 
     if not isinstance(data, list) or len(data) == 0:
-        return None, "Invalid token structure"
+        return None, "FAILED (invalid token structure)"
 
     token = data[0].get("token") if isinstance(data[0], dict) else None
     if not token:
-        return None, "Token field empty"
+        return None, "FAILED (token field empty)"
 
     return token, None
 
 
 def process_account(email, password):
+    email_short = email[:30] if len(email) > 30 else email
+
     session = requests.Session()
     session.max_redirects = 15
     session.headers.update(HEADERS)
 
     try:
-        result_session, err = login(session, email, password)
+        result_session, err = login(session, email, password, email_short)
         if err:
             return {"email": email, "success": False, "error": err}
 
-        token, err = extract_token(result_session)
+        token, err = extract_token(result_session, email_short)
         if err:
             return {"email": email, "success": False, "error": err}
 
         return {"email": email, "success": True, "token": token}
 
     except requests.exceptions.Timeout:
-        return {"email": email, "success": False, "error": "LOGIN_FAILED (timeout)"}
+        return {"email": email, "success": False, "error": "TIMEOUT"}
     except requests.exceptions.ConnectionError:
-        return {"email": email, "success": False, "error": "LOGIN_FAILED (connection)"}
+        return {"email": email, "success": False, "error": "CONNECTION_ERROR"}
     except Exception as ex:
-        return {"email": email, "success": False, "error": f"LOGIN_FAILED ({ex})"}
+        return {"email": email, "success": False, "error": f"ERROR ({ex})"}
 
 
 def save_token(token):
@@ -318,8 +390,10 @@ def run_claimer(accounts):
     print(f"  > accounts loaded : {total}")
     print(f"  > threads         : {THREADS}")
     print(f"  > output          : {OUTPUT_FILE}")
-    print_separator()
     print()
+    print_separator()
+    print(f"  | {'ACCOUNT':<30} | {'STEP':<9} | STATUS")
+    print_separator()
 
     start_time = time.time()
     completed = [0]
@@ -338,17 +412,18 @@ def run_claimer(accounts):
             if result["success"]:
                 stats["success"] += 1
                 save_token(result["token"])
-                status_text = "SUCCESS"
+                status = "SUCCESS"
             else:
                 stats["failed"] += 1
                 save_failed(email, result["error"])
-                status_text = result["error"]
+                status = result["error"]
 
+            print_separator()
             bar = progress_bar(current, total)
-            print(f"  {bar}  {current}/{total}")
-            print(f"  > {email}")
-            print(f"  > {status_text}")
-            print()
+            e_short = email[:30] if len(email) > 30 else email
+            print(f"  | {e_short:<30} | DONE      | {status}")
+            print(f"  | {bar}  {current}/{total}")
+            print_separator()
 
         return result
 
@@ -362,13 +437,17 @@ def run_claimer(accounts):
                 pass
 
     elapsed = time.time() - start_time
-    print_separator()
     print()
-    print(f"  > completed in {elapsed:.1f}s")
-    print(f"  > success : {stats['success']}")
-    print(f"  > failed  : {stats['failed']}")
+    print("  +-----------------------------------------+")
+    print("  |              SUMMARY                     |")
+    print("  +-----------------------------------------+")
+    print(f"  | completed in {elapsed:.1f}s")
+    print(f"  | success : {stats['success']}")
+    print(f"  | failed  : {stats['failed']}")
+    print(f"  | total   : {total}")
     if stats["success"] > 0:
-        print(f"  > saved to {OUTPUT_FILE}")
+        print(f"  | saved   : {OUTPUT_FILE}")
+    print("  +-----------------------------------------+")
     print()
 
 
@@ -415,9 +494,6 @@ def main():
         return
 
     print()
-    print_separator()
-    print()
-
     run_claimer(accounts)
 
     input("  press enter to exit...")

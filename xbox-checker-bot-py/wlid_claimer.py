@@ -1,5 +1,5 @@
-# WLID Claimer Script
-# Made by TalkNeon
+# made by talkneon
+# WLID Claimer
 
 import re
 import sys
@@ -31,11 +31,17 @@ TOKEN_HEADERS = {
     "Pragma": "no-cache",
 }
 
+THREADS = 3
 RESULTS_DIR = "results"
 OUTPUT_FILE = os.path.join(RESULTS_DIR, "valid_wlid.txt")
+FAILED_FILE = os.path.join(RESULTS_DIR, "failed_wlid.txt")
 
 lock = threading.Lock()
-stats = {"success": 0, "failed": 0}
+stats = {"success": 0, "failed": 0, "total": 0}
+
+
+def clear():
+    os.system("cls" if os.name == "nt" else "clear")
 
 
 def decode_json_string(text):
@@ -54,6 +60,29 @@ def extract_all_inputs(text, pattern):
     return re.findall(pattern, text, re.DOTALL)
 
 
+def progress_bar(current, total, width=30):
+    if total == 0:
+        return "[" + "-" * width + "]"
+    filled = int(width * current / total)
+    bar = "#" * filled + "-" * (width - filled)
+    pct = int(100 * current / total)
+    return f"[{bar}] {pct}%"
+
+
+def print_header():
+    clear()
+    print()
+    print("  +-----------------------------------------+")
+    print("  |            WLID Claimer                  |")
+    print("  |            made by talkneon              |")
+    print("  +-----------------------------------------+")
+    print()
+
+
+def print_separator():
+    print("  " + "-" * 43)
+
+
 def login(session, email, password):
     r = session.get(
         "https://account.microsoft.com/billing/redeem",
@@ -64,7 +93,7 @@ def login(session, email, password):
 
     rurl_match = extract_pattern(text, r'"urlPost":"([^"]+)"')
     if not rurl_match:
-        return None, "Could not extract redirect URL from billing page"
+        return None, "Could not extract redirect URL"
 
     rurl = "https://login.microsoftonline.com" + decode_json_string(rurl_match)
     r = session.get(
@@ -104,7 +133,7 @@ def login(session, email, password):
     if not ppft:
         if "captcha" in text.lower() or "hip_challenge" in text.lower():
             return None, "CAPTCHA_REQUIRED"
-        return None, "Could not extract PPFT token"
+        return None, "Could not extract PPFT"
 
     url_post = extract_pattern(text, r'"urlPost":"([^"]+)"')
     if not url_post:
@@ -113,18 +142,15 @@ def login(session, email, password):
         return None, "Could not extract urlPost"
 
     login_data = {
-        "login": email,
-        "loginfmt": email,
-        "passwd": password,
-        "PPFT": ppft,
+        "login": email, "loginfmt": email,
+        "passwd": password, "PPFT": ppft,
     }
     r = session.post(
         url_post, data=login_data,
         headers={
             **HEADERS,
             "Content-Type": "application/x-www-form-urlencoded",
-            "Referer": furl,
-            "Origin": "https://login.live.com",
+            "Referer": furl, "Origin": "https://login.live.com",
         },
         allow_redirects=True, timeout=30,
     )
@@ -156,23 +182,18 @@ def login(session, email, password):
                     redir = redirect_m.group(1).replace("u0026", "&").replace("\\&", "&")
                     r = session.get(redir, headers=HEADERS, allow_redirects=True, timeout=30)
                     login_text = r.text.replace("\\", "")
-
         ppft2 = extract_pattern(login_text, r'"sFT":"([^"]+)"')
 
     if not ppft2:
-        return None, "Could not extract second sFT token"
+        return None, "Could not extract second sFT"
 
     lurl = extract_pattern(login_text, r'"urlPost":"([^"]+)"')
     if not lurl:
         return None, "Could not extract final login URL"
 
     final_data = {
-        "LoginOptions": "1",
-        "type": "28",
-        "ctx": "",
-        "hpgrequestid": "",
-        "PPFT": ppft2,
-        "canary": "",
+        "LoginOptions": "1", "type": "28", "ctx": "",
+        "hpgrequestid": "", "PPFT": ppft2, "canary": "",
     }
     r = session.post(
         lurl, data=final_data,
@@ -226,14 +247,14 @@ def extract_token(session):
     try:
         data = r.json()
     except Exception:
-        return None, "Invalid token response (not JSON)"
+        return None, "Invalid token response"
 
     if not isinstance(data, list) or len(data) == 0:
-        return None, "Invalid token structure (not a list)"
+        return None, "Invalid token structure"
 
     token = data[0].get("token") if isinstance(data[0], dict) else None
     if not token:
-        return None, "Token field missing or empty"
+        return None, "Token field empty"
 
     return token, None
 
@@ -269,86 +290,70 @@ def save_token(token):
             f.write(token + "\n")
 
 
-def load_accounts(source):
+def save_failed(email, reason):
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    with lock:
+        with open(FAILED_FILE, "a", encoding="utf-8") as f:
+            f.write(f"{email} | {reason}\n")
+
+
+def load_accounts(path):
     accounts = []
-    if os.path.isfile(source):
-        with open(source, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if ":" in line:
-                    accounts.append(line)
-    elif ":" in source:
-        accounts.append(source)
-    else:
-        print(f"[!] Invalid input: {source}")
-        sys.exit(1)
+    if not os.path.isfile(path):
+        return accounts
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            line = line.strip()
+            if ":" in line and len(line) > 3:
+                accounts.append(line)
     return accounts
 
 
-def print_banner():
-    print()
-    print("=" * 50)
-    print("  WLID Claimer")
-    print("  Made by TalkNeon")
-    print("=" * 50)
-    print()
-
-
-def main():
-    print_banner()
-
-    if len(sys.argv) < 2:
-        print("Usage: python wlid_claimer.py <email:pass or accounts.txt> [threads]")
-        print()
-        print("Examples:")
-        print("  python wlid_claimer.py accounts.txt")
-        print("  python wlid_claimer.py accounts.txt 5")
-        print("  python wlid_claimer.py user@outlook.com:password123")
-        sys.exit(1)
-
-    source = sys.argv[1]
-    threads = int(sys.argv[2]) if len(sys.argv) > 2 else 3
-    threads = max(1, min(threads, 10))
-
-    accounts = load_accounts(source)
-    if not accounts:
-        print("[!] No valid accounts found")
-        sys.exit(1)
-
+def run_claimer(accounts):
     total = len(accounts)
-    print(f"[*] Loaded {total} account(s)")
-    print(f"[*] Threads: {threads}")
-    print(f"[*] Output:  {OUTPUT_FILE}")
-    print("-" * 50)
+    stats["total"] = total
+    stats["success"] = 0
+    stats["failed"] = 0
 
-    completed = [0]
+    print(f"  > accounts loaded : {total}")
+    print(f"  > threads         : {THREADS}")
+    print(f"  > output          : {OUTPUT_FILE}")
+    print_separator()
+    print()
+
     start_time = time.time()
+    completed = [0]
 
     def worker(acc):
         idx = acc.index(":")
         email = acc[:idx]
         password = acc[idx + 1:]
 
+        result = process_account(email, password)
+
         with lock:
             completed[0] += 1
             current = completed[0]
-        print(f"[{current}/{total}] Checking: {email}")
 
-        result = process_account(email, password)
-
-        if result["success"]:
-            save_token(result["token"])
-            with lock:
+            if result["success"]:
                 stats["success"] += 1
-            print(f"  -> SUCCESS")
-        else:
-            with lock:
+                save_token(result["token"])
+                status_text = "SUCCESS"
+            else:
                 stats["failed"] += 1
-            print(f"  -> FAILED ({result['error']})")
+                save_failed(email, result["error"])
+                status_text = result["error"]
+
+            bar = progress_bar(current, total)
+            print(f"  {bar}  {current}/{total}")
+            print(f"  > {email}")
+            print(f"  > {status_text}")
+            print()
 
         return result
 
-    with ThreadPoolExecutor(max_workers=min(threads, total)) as pool:
+    thread_count = min(THREADS, total)
+    with ThreadPoolExecutor(max_workers=thread_count) as pool:
         futures = [pool.submit(worker, acc) for acc in accounts]
         for f in as_completed(futures):
             try:
@@ -357,14 +362,65 @@ def main():
                 pass
 
     elapsed = time.time() - start_time
+    print_separator()
     print()
-    print("-" * 50)
-    print(f"[*] Completed in {elapsed:.1f}s")
-    print(f"[*] Success: {stats['success']}")
-    print(f"[*] Failed:  {stats['failed']}")
+    print(f"  > completed in {elapsed:.1f}s")
+    print(f"  > success : {stats['success']}")
+    print(f"  > failed  : {stats['failed']}")
     if stats["success"] > 0:
-        print(f"[*] Tokens saved to: {OUTPUT_FILE}")
+        print(f"  > saved to {OUTPUT_FILE}")
     print()
+
+
+def main():
+    print_header()
+
+    print("  [1] Load accounts from file")
+    print("  [2] Paste accounts manually")
+    print()
+
+    choice = input("  > select option: ").strip()
+
+    accounts = []
+
+    if choice == "1":
+        print()
+        path = input("  > drag/drop file or enter path: ").strip()
+        path = path.strip('"').strip("'")
+        if not os.path.isfile(path):
+            print(f"\n  file not found: {path}")
+            return
+        accounts = load_accounts(path)
+        if not accounts:
+            print("\n  no valid accounts found in file")
+            return
+
+    elif choice == "2":
+        print()
+        print("  paste accounts (email:pass), one per line")
+        print("  type 'done' when finished")
+        print()
+        while True:
+            line = input("  > ").strip()
+            if line.lower() == "done":
+                break
+            if ":" in line and len(line) > 3:
+                accounts.append(line)
+        if not accounts:
+            print("\n  no valid accounts entered")
+            return
+
+    else:
+        print("\n  invalid option")
+        return
+
+    print()
+    print_separator()
+    print()
+
+    run_claimer(accounts)
+
+    input("  press enter to exit...")
 
 
 if __name__ == "__main__":

@@ -575,7 +575,7 @@ def handle_update(update):
             try:
                 run_processing(lines, on_progress=on_progress, on_complete=on_complete)
             except Exception as e:
-                send_message(chat_id, f"<b>Processing error:</b> {str(e)[:200}" + FOOTER)
+                send_message(chat_id, f"<b>Processing error:</b> {str(e)[:200]}" + FOOTER)
                 with active_lock:
                     active_users.discard(user_id)
 

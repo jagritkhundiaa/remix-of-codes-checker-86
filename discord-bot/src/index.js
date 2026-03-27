@@ -1575,8 +1575,213 @@ async function handleInboxAio(respond, userId, accountsRaw, accountsFile, thread
   }
 }
 
+// ── Netflix Checker handler ─────────────────────────────────
+
+async function handleNetflix(respond, userId, accountsRaw, accountsFile, threads = 10, dmUser = null) {
+  if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
+
+  const acquire = limiter.acquire(userId, "netflix");
+  if (!acquire.ok) {
+    const reason = acquire.reason === "busy"
+      ? "You already have a command running. Wait for it to finish."
+      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
+    return respond({ embeds: [errorEmbed(reason)] });
+  }
+
+  const ac = new AbortController();
+  activeAborts.set(userId, ac);
+
+  try {
+    let accounts = splitInput(accountsRaw);
+    if (accountsFile) accounts = accounts.concat(await fetchAttachmentLines(accountsFile));
+    accounts = accounts.filter((a) => a.includes(":"));
+
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided. Use email:password format.")] });
+    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts (max ${MAX_COMBO_LINES}).`)] });
+
+    const nfxStats = { premium: 0, standard: 0, basic: 0, free: 0, cancelled: 0, invalid: 0, blocked: 0, timeout: 0, errors: 0 };
+    let hits = [];
+
+    const msg = await respond({ embeds: [netflixProgressEmbed(0, accounts.length, nfxStats)], components: [stopButton(userId)], fetchReply: true });
+    const start = Date.now();
+    let lastUpdate = 0;
+
+    const results = await checkNetflixAccounts(accounts, Math.min(threads, 10), (checked, total, result) => {
+      if (result) {
+        if (result.status === "hit") {
+          hits.push(result);
+          const plan = (result.plan || "").toLowerCase();
+          const status = (result.accountStatus || "").toLowerCase();
+          if (plan.includes("premium")) nfxStats.premium++;
+          else if (plan.includes("standard")) nfxStats.standard++;
+          else if (plan.includes("basic")) nfxStats.basic++;
+          if (status.includes("free") || status.includes("trial")) nfxStats.free++;
+          else if (status.includes("cancel")) nfxStats.cancelled++;
+        } else if (result.status === "invalid") nfxStats.invalid++;
+        else if (result.status === "blocked") nfxStats.blocked++;
+        else if (result.status === "timeout") nfxStats.timeout++;
+        else nfxStats.errors++;
+      }
+
+      const now = Date.now();
+      if (now - lastUpdate > 3000) {
+        lastUpdate = now;
+        updateProgress(msg, netflixProgressEmbed(checked, total, nfxStats), userId).catch(() => {});
+      }
+    }, ac.signal);
+
+    const elapsed = Math.round((Date.now() - start) / 1000);
+
+    // Build result files
+    const { AttachmentBuilder } = require("discord.js");
+    const files = [];
+
+    if (hits.length > 0) {
+      const allHits = hits.map((h) =>
+        `Email: ${h.email}\nPassword: ${h.password}\nPlan: ${h.plan}\nStatus: ${h.accountStatus}\nPayment: ${h.payment}\nNext Billing: ${h.nextBilling}\nProfiles: ${h.profiles}\nCountry: ${h.country}\nCreated: ${h.created}\n${"=".repeat(30)}`
+      ).join("\n\n");
+      files.push(new AttachmentBuilder(Buffer.from(allHits, "utf-8"), { name: "netflix_hits.txt" }));
+    }
+
+    const embed = netflixResultsEmbed({
+      total: accounts.length,
+      hits: hits.length,
+      invalid: nfxStats.invalid,
+      blocked: nfxStats.blocked,
+      timeout: nfxStats.timeout,
+      errors: nfxStats.errors,
+      premium: nfxStats.premium,
+      standard: nfxStats.standard,
+      basic: nfxStats.basic,
+      free: nfxStats.free,
+      cancelled: nfxStats.cancelled,
+      elapsed,
+      username: dmUser?.username,
+    });
+
+    if (dmUser) {
+      try {
+        await dmUser.send({ embeds: [embed], files });
+        await msg.edit({ embeds: [infoEmbed("Netflix Checker Complete", `Checked ${accounts.length} accounts. ${hits.length} hits found. Results sent to your DMs.`)], components: [] });
+      } catch {
+        await msg.edit({ embeds: [embed], files, components: [] });
+      }
+    } else {
+      await msg.edit({ embeds: [embed], files, components: [] });
+    }
+
+    statsManager.record(userId, "netflix", hits.length);
+  } catch (err) {
+    await respond({ embeds: [errorEmbed(`Unexpected error: ${err.message}`)] });
+  } finally {
+    activeAborts.delete(userId);
+    limiter.release(userId);
+  }
+}
+
+// ── Steam Checker handler ───────────────────────────────────
+
+async function handleSteam(respond, userId, accountsRaw, accountsFile, threads = 15, dmUser = null) {
+  if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
+
+  const acquire = limiter.acquire(userId, "steam");
+  if (!acquire.ok) {
+    const reason = acquire.reason === "busy"
+      ? "You already have a command running. Wait for it to finish."
+      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
+    return respond({ embeds: [errorEmbed(reason)] });
+  }
+
+  const ac = new AbortController();
+  activeAborts.set(userId, ac);
+
+  try {
+    let accounts = splitInput(accountsRaw);
+    if (accountsFile) accounts = accounts.concat(await fetchAttachmentLines(accountsFile));
+    accounts = accounts.filter((a) => a.includes(":"));
+
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided. Use user:password format.")] });
+    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts (max ${MAX_COMBO_LINES}).`)] });
+
+    const stStats = { valid: 0, invalid: 0 };
+    let hits = [];
+
+    const msg = await respond({ embeds: [steamProgressEmbed(0, accounts.length, stStats)], components: [stopButton(userId)], fetchReply: true });
+    const start = Date.now();
+    let lastUpdate = 0;
+
+    const results = await checkSteamAccounts(accounts, Math.min(threads, 15), (checked, total, result) => {
+      if (result) {
+        stStats.valid++;
+        hits.push(result);
+      } else {
+        stStats.invalid++;
+      }
+
+      const now = Date.now();
+      if (now - lastUpdate > 3000) {
+        lastUpdate = now;
+        updateProgress(msg, steamProgressEmbed(checked, total, stStats), userId).catch(() => {});
+      }
+    }, ac.signal);
+
+    const elapsed = Math.round((Date.now() - start) / 1000);
+
+    // Build result files
+    const { AttachmentBuilder } = require("discord.js");
+    const files = [];
+
+    if (hits.length > 0) {
+      const allHits = hits.map((h) => {
+        const gamesList = shortenGames(h.games, 10);
+        return `Username: ${h.username}\nPassword: ${h.password}\nEmail: ${h.email}\nBalance: ${h.balance}\nCountry: ${h.country}\nTotal Games: ${h.totalGames}\nGames: ${gamesList}\nLevel: ${h.level}\nLimited: ${h.limited}\nVAC Bans: ${h.vacBans}\nGame Bans: ${h.gameBans}\nCommunity Ban: ${h.communityBan}\n${"=".repeat(30)}`;
+      }).join("\n\n");
+      files.push(new AttachmentBuilder(Buffer.from(allHits, "utf-8"), { name: "steam_hits.txt" }));
+
+      // Separate with/without email
+      const withEmail = hits.filter((h) => h.email && h.email !== "Unknown");
+      const withoutEmail = hits.filter((h) => !h.email || h.email === "Unknown");
+
+      if (withEmail.length > 0) {
+        const data = withEmail.map((h) => `${h.username}:${h.password}\n${h.email}:${h.password}`).join("\n");
+        files.push(new AttachmentBuilder(Buffer.from(data, "utf-8"), { name: "valid_with_email.txt" }));
+      }
+      if (withoutEmail.length > 0) {
+        const data = withoutEmail.map((h) => `${h.username}:${h.password}`).join("\n");
+        files.push(new AttachmentBuilder(Buffer.from(data, "utf-8"), { name: "valid_without_email.txt" }));
+      }
+    }
+
+    const embed = steamResultsEmbed({
+      total: accounts.length,
+      valid: stStats.valid,
+      invalid: stStats.invalid,
+      elapsed,
+      username: dmUser?.username,
+    });
+
+    if (dmUser) {
+      try {
+        await dmUser.send({ embeds: [embed], files });
+        await msg.edit({ embeds: [infoEmbed("Steam Checker Complete", `Checked ${accounts.length} accounts. ${stStats.valid} valid found. Results sent to your DMs.`)], components: [] });
+      } catch {
+        await msg.edit({ embeds: [embed], files, components: [] });
+      }
+    } else {
+      await msg.edit({ embeds: [embed], files, components: [] });
+    }
+
+    statsManager.record(userId, "steam", stStats.valid);
+  } catch (err) {
+    await respond({ embeds: [errorEmbed(`Unexpected error: ${err.message}`)] });
+  } finally {
+    activeAborts.delete(userId);
+    limiter.release(userId);
+  }
+}
 
 // ── Slash Commands ───────────────────────────────────────────
+
 
 client.on("interactionCreate", async (interaction) => {
   // Handle stop button clicks

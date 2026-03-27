@@ -57,6 +57,8 @@ const {
   recoverResultEmbed,
 } = require("./utils/embeds");
 const { checkRewardsBalances } = require("./utils/microsoft-rewards");
+const { checkNetflixAccounts } = require("./utils/netflix-checker");
+const { checkSteamAccounts, shortenGames } = require("./utils/steam-checker");
 
 const client = new Client({
   intents: [

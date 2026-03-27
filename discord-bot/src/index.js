@@ -2176,6 +2176,24 @@ client.on("messageCreate", async (message) => {
       await handleAccountChecker(respond, message.author.id, accountsRaw, attachment, 5, message.author);
     }
 
+    else if (cmd === "netflix") {
+      const accountsRaw = args.join(" ");
+      const attachment = message.attachments.first();
+      if (!accountsRaw && !attachment) {
+        return respond({ embeds: [infoEmbed("Usage", "`.netflix <accounts>`\nProvide email:password or attach a `.txt` file.\nChecks Netflix accounts. Results sent to your DMs.")] });
+      }
+      await handleNetflix(respond, message.author.id, accountsRaw, attachment, 10, message.author);
+    }
+
+    else if (cmd === "steam") {
+      const accountsRaw = args.join(" ");
+      const attachment = message.attachments.first();
+      if (!accountsRaw && !attachment) {
+        return respond({ embeds: [infoEmbed("Usage", "`.steam <accounts>`\nProvide user:password or attach a `.txt` file.\nChecks Steam accounts. Results sent to your DMs.")] });
+      }
+      await handleSteam(respond, message.author.id, accountsRaw, attachment, 15, message.author);
+    }
+
     else if (cmd === "help") {
       return respond({ embeds: [helpOverviewEmbed(config.PREFIX)], components: [helpSelectMenu()] });
     }

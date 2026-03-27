@@ -1950,6 +1950,22 @@ client.on("interactionCreate", async (interaction) => {
       await handleRefund(respond, user.id, accounts, accountsFile, threads, user, user.username);
     }
 
+    else if (commandName === "netflix") {
+      await interaction.deferReply();
+      const accounts = interaction.options.getString("accounts");
+      const accountsFile = interaction.options.getAttachment("accounts_file");
+      const threads = interaction.options.getInteger("threads") || 10;
+      await handleNetflix(respond, user.id, accounts, accountsFile, threads, user);
+    }
+
+    else if (commandName === "steam") {
+      await interaction.deferReply();
+      const accounts = interaction.options.getString("accounts");
+      const accountsFile = interaction.options.getAttachment("accounts_file");
+      const threads = interaction.options.getInteger("threads") || 15;
+      await handleSteam(respond, user.id, accounts, accountsFile, threads, user);
+    }
+
     else if (commandName === "help") {
       await respond({ embeds: [helpOverviewEmbed("/")], components: [helpSelectMenu()] });
     }

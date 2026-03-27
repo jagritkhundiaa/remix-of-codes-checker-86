@@ -233,6 +233,32 @@ const commands = [
       o.setName("threads").setDescription("Number of concurrent threads (1-20, default 5)").setMinValue(1).setMaxValue(20)
     ),
 
+  new SlashCommandBuilder()
+    .setName("netflix")
+    .setDescription("Check Netflix accounts (email:password or cookies)")
+    .addAttachmentOption((o) =>
+      o.setName("accounts_file").setDescription("Text file with email:password per line").setRequired(false)
+    )
+    .addStringOption((o) =>
+      o.setName("accounts").setDescription("Accounts as email:password (comma-separated)").setRequired(false)
+    )
+    .addIntegerOption((o) =>
+      o.setName("threads").setDescription("Number of concurrent threads (1-10, default 10)").setMinValue(1).setMaxValue(10)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("steam")
+    .setDescription("Check Steam accounts (user:password)")
+    .addAttachmentOption((o) =>
+      o.setName("accounts_file").setDescription("Text file with user:password per line").setRequired(false)
+    )
+    .addStringOption((o) =>
+      o.setName("accounts").setDescription("Accounts as user:password (comma-separated)").setRequired(false)
+    )
+    .addIntegerOption((o) =>
+      o.setName("threads").setDescription("Number of concurrent threads (1-15, default 15)").setMinValue(1).setMaxValue(15)
+    ),
+
 ].map((c) => c.toJSON());
 
 const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);

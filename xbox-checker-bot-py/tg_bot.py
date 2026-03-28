@@ -1711,7 +1711,7 @@ def handle_update(update):
         GATE_REGISTRY = [
             ("auth", "/auth", "Stripe Auth (Dilaboards)", True),
             ("auth2", "/auth2", "Stripe Auth (Stormx)", True),
-            ("stc", "/stc", "PayStation Auth (NZ)", True),
+            ("stc", "/stc", "Stripe Auth (Alt)", True),
             ("st1", "/st1", "HiAPI Check3", True),
             ("st5", "/st5", "HiAPI Check", True),
             ("charge", "/charge", "Stripe Charge $1-3", True),

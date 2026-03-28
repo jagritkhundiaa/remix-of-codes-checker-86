@@ -1716,6 +1716,7 @@ def handle_update(update):
     # --- /chkapi* — Admin-only secret API health checks ---
     chkapi_cmds = {
         "/chkapiauth": "auth",
+        "/chkapiautosho": "autosho",
         "/chkapist1": "st1",
         "/chkapist5": "st5",
     }

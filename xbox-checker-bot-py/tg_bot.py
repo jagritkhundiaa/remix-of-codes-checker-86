@@ -1240,10 +1240,9 @@ def handle_update(update):
         return
 
     # --- Gate commands (coming soon) ---
-    if text in ("/nonvbv", "/charge"):
+    if text in ("/nonvbv",):
         gate_names = {
             "/nonvbv": "Braintree Non-VBV",
-            "/charge": "Stripe Checkout $3",
         }
         name = gate_names[text]
         send_message(chat_id, f"<b>{name}</b>\n\nComing soon.{FOOTER}")

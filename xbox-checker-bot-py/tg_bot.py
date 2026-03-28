@@ -32,6 +32,7 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 KEYS_FILE = os.path.join(DATA_DIR, "tg_keys.json")
 USERS_FILE = os.path.join(DATA_DIR, "tg_users.json")
 STATS_FILE = os.path.join(DATA_DIR, "tg_stats.json")
+ADMINS_FILE = os.path.join(DATA_DIR, "tg_admins.json")
 PROXIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxies.txt")
 
 os.makedirs(DATA_DIR, exist_ok=True)

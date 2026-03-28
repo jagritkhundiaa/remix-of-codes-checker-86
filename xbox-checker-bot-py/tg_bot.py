@@ -1090,15 +1090,15 @@ def handle_update(update):
         send_message(chat_id, f"<b>Access Granted</b>\n\nDuration: <code>{dur_label}</code>\nLine Limit: <code>{limit_label}</code>\nWelcome aboard.{FOOTER}")
         return
 
-    # --- /run ---
-    if text == "/run":
+    # --- /auth (Stripe Auth) ---
+    if text == "/auth":
         if not is_authorized(user_id):
             send_message(chat_id, fmt_unauthorized())
             return
 
         reply = msg.get("reply_to_message")
         if not reply or not reply.get("document"):
-            send_message(chat_id, "<b>Reply to a .txt file with /run</b>" + FOOTER)
+            send_message(chat_id, "<b>Reply to a .txt file with /auth</b>" + FOOTER)
             return
 
         doc = reply["document"]

@@ -1531,6 +1531,89 @@ def handle_update(update):
         send_message(chat_id, msg_text)
         return
 
+    # --- /chkapi* — Admin-only secret API health checks ---
+    chkapi_cmds = {
+        "/chkapiauth": "auth",
+        "/chkapiauth2": "auth2",
+        "/chkapistc": "stc",
+        "/chkapist1": "st1",
+        "/chkapist5": "st5",
+        "/chkapicharge": "charge",
+    }
+    if text in chkapi_cmds:
+        if not is_admin(user_id):
+            return  # Silent — secret command, don't reveal existence
+        gate_key = chkapi_cmds[text]
+        gate_info = GATE_PROBE_MAP.get(gate_key, {})
+        gate_name = gate_info.get("name", gate_key)
+        currently_enabled = is_gate_enabled(gate_key)
+
+        send_message(chat_id, f"<b>🔍 Probing {gate_name}...</b>")
+        alive, latency, detail = probe_gate(gate_key)
+
+        if alive:
+            status_line = f"🟢 <b>ALIVE</b> — {latency}ms"
+            action_text = "Gate is working. Want to disable it?"
+            buttons = {"inline_keyboard": [[
+                {"text": "🔴 Disable", "callback_data": f"gate_off_{gate_key}"},
+                {"text": "✅ Keep", "callback_data": "gate_keep"},
+            ]]}
+        else:
+            status_line = f"🔴 <b>DEAD</b> — {detail}"
+            if currently_enabled:
+                action_text = "API is down. Disable this gate?"
+                buttons = {"inline_keyboard": [[
+                    {"text": "🔴 Yes, disable", "callback_data": f"gate_off_{gate_key}"},
+                    {"text": "⏳ Keep enabled", "callback_data": "gate_keep"},
+                ]]}
+            else:
+                action_text = "Gate is already disabled. Want to re-enable?"
+                buttons = {"inline_keyboard": [[
+                    {"text": "🟢 Re-enable", "callback_data": f"gate_on_{gate_key}"},
+                    {"text": "❌ Keep off", "callback_data": "gate_keep"},
+                ]]}
+
+        enabled_label = "🟢 Enabled" if currently_enabled else "🔴 Disabled"
+        send_message(chat_id,
+            f"<b>API Check — {gate_name}</b>\n"
+            f"{'─' * 28}\n\n"
+            f"Status: {status_line}\n"
+            f"Detail: <code>{detail}</code>\n"
+            f"Latency: <code>{latency}ms</code>\n"
+            f"Currently: {enabled_label}\n\n"
+            f"{action_text}",
+            reply_markup=buttons)
+        return
+
+    # --- /chkapis — Check ALL gates at once (admin only) ---
+    if text == "/chkapis":
+        if not is_admin(user_id):
+            return  # Silent
+        send_message(chat_id, "<b>🔍 Checking all gates...</b>\nThis may take a moment.")
+        lines_out = [f"<b>🛡️ API Health Report</b>\n{'─' * 28}\n"]
+        any_dead = []
+        for gate_key, info in GATE_PROBE_MAP.items():
+            alive, latency, detail = probe_gate(gate_key)
+            enabled = is_gate_enabled(gate_key)
+            if alive:
+                icon = "🟢"
+                status = f"Alive ({latency}ms)"
+            else:
+                icon = "🔴"
+                status = f"Dead — {detail}"
+                any_dead.append(gate_key)
+            en_icon = "✅" if enabled else "⛔"
+            lines_out.append(f"{icon} <code>{info['cmd']}</code> — {info['name']}\n    {status} | {en_icon} {'On' if enabled else 'Off'}")
+
+        if any_dead:
+            lines_out.append(f"\n⚠️ <b>{len(any_dead)} dead gate(s)</b> — use individual /chkapi* to disable")
+        else:
+            lines_out.append(f"\n✅ <b>All gates operational</b>")
+
+        lines_out.append(FOOTER)
+        send_message(chat_id, "\n".join(lines_out))
+        return
+
     # --- /gates ---
     if text == "/gates":
         GATE_REGISTRY = [
@@ -1545,8 +1628,16 @@ def handle_update(update):
         gs = load_gate_stats()
         lines_out = ["<b>Available Gates</b>\n"]
         for key, cmd, label, live in GATE_REGISTRY:
-            status_icon = "🟢" if live else "🔴"
-            status_text = "Live" if live else "Soon"
+            enabled = is_gate_enabled(key)
+            if not live:
+                status_icon = "🔴"
+                status_text = "Soon"
+            elif not enabled:
+                status_icon = "⛔"
+                status_text = "Disabled"
+            else:
+                status_icon = "🟢"
+                status_text = "Live"
             s = gs.get(key, {})
             total = s.get("total", 0)
             approved = s.get("approved", 0)

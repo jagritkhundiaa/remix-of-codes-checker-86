@@ -874,6 +874,8 @@ def fmt_start(is_adm=False):
         "  /auth       — Stripe Auth (Dilaboards)\n"
         "  /auth2      — Stripe Auth (Stormx)\n"
         "  /stc        — PayStation Auth (NZ)\n"
+        "  /st1        — HiAPI Check3\n"
+        "  /st5        — HiAPI Check\n"
         "  /nonvbv     — Braintree Non-VBV (coming soon)\n"
         "  /charge     — Stripe Checkout $3 (coming soon)\n\n"
         "<b>Commands:</b>\n"

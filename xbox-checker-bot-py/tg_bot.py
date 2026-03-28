@@ -1135,6 +1135,8 @@ def process_single_entry(entry, proxies_list, user_id, gate="auth"):
                 result = check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check3", proxy_dict)
             elif gate == "st5":
                 result = check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check", proxy_dict)
+            elif gate == "autosho":
+                result = check_cc_shopify(c_num, c_mm, c_yy, c_cvv, proxy_dict)
             else:
                 result = run_automated_process(c_num, c_cvv, c_yy, c_mm, proxy_dict)
         else:

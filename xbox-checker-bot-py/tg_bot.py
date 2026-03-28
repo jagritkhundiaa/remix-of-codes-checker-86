@@ -419,6 +419,86 @@ def format_proxy(proxy_str):
     return None
 
 
+# ============================================================
+#  Proxy validation & connectivity testing
+# ============================================================
+PROXY_FORMAT_RE = re.compile(
+    r'^(?:(?:https?|socks[45]h?):\/\/)?'           # optional protocol
+    r'(?:([^:@]+):([^:@]+)@)?'                      # optional user:pass@
+    r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|[\w.\-]+)'  # host/IP
+    r':(\d{1,5})$'                                  # :port
+)
+
+PROXY_FORMAT_4PART_RE = re.compile(
+    r'^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{1,5}):([^:]+):([^:]+)$'  # ip:port:user:pass
+)
+
+
+def validate_proxy_format(raw):
+    """Validate proxy format. Returns normalized proxy string or None."""
+    line = raw.strip()
+    if not line:
+        return None
+
+    # Try protocol://[user:pass@]host:port or host:port
+    m = PROXY_FORMAT_RE.match(line)
+    if m:
+        host, port_str = m.group(3), m.group(4)
+        port = int(port_str)
+        if port < 1 or port > 65535:
+            return None
+        # Validate IP octets if it looks like an IP
+        if re.match(r'^\d+\.\d+\.\d+\.\d+$', host):
+            octets = host.split('.')
+            if any(int(o) > 255 for o in octets):
+                return None
+        return line
+
+    # Try ip:port:user:pass format
+    m2 = PROXY_FORMAT_4PART_RE.match(line)
+    if m2:
+        host, port_str = m2.group(1), m2.group(2)
+        port = int(port_str)
+        if port < 1 or port > 65535:
+            return None
+        octets = host.split('.')
+        if any(int(o) > 255 for o in octets):
+            return None
+        return line
+
+    return None
+
+
+def test_proxy_connectivity(proxy_str):
+    """Test proxy connectivity. Returns (ok, latency_ms, reason)."""
+    proxy_dict = format_proxy(proxy_str)
+    if not proxy_dict:
+        # Try as-is with protocol prefix
+        if '://' in proxy_str:
+            proxy_dict = {"http": proxy_str, "https": proxy_str}
+        else:
+            proxy_dict = {"http": f"http://{proxy_str}", "https": f"http://{proxy_str}"}
+
+    test_url = "http://httpbin.org/ip"
+    start = time.time()
+    try:
+        resp = requests.get(test_url, proxies=proxy_dict, timeout=10)
+        latency = round((time.time() - start) * 1000)
+        if resp.status_code == 200:
+            return True, latency, None
+        return False, latency, f"HTTP {resp.status_code}"
+    except requests.exceptions.ProxyError:
+        return False, 0, "Proxy connection refused"
+    except requests.exceptions.ConnectTimeout:
+        return False, 0, "Connection timeout (10s)"
+    except requests.exceptions.ReadTimeout:
+        return False, 0, "Read timeout (10s)"
+    except requests.exceptions.ConnectionError as e:
+        return False, 0, f"Connection error"
+    except Exception as e:
+        return False, 0, f"Error: {str(e)[:50]}"
+
+
 def check_cc_auth2(cc_number, month, year, cvv, proxies=None):
     """Auth2 gate — uses stripe.stormx.pw autostripe endpoint."""
     start_time = time.time()

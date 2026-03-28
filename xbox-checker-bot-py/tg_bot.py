@@ -856,28 +856,41 @@ def handle_update(update):
         send_message(chat_id, fmt_mykey(user_id))
         return
 
-    # --- /proxies (admin uploads proxy file) ---
+    # --- /proxies (admin: global proxies, user: personal proxies) ---
     if text == "/proxies":
         reply = msg.get("reply_to_message")
         if not reply or not reply.get("document"):
-            send_message(chat_id, "<b>Reply to a .txt proxy file with /proxies</b>" + FOOTER)
+            send_message(chat_id,
+                "<b>Upload Proxies</b>\n\n"
+                "Reply to a <b>.txt</b> proxy file with /proxies\n\n"
+                "• <b>Admins</b> — sets global proxies for all users\n"
+                "• <b>Users</b> — adds personal proxies (used alongside global)" + FOOTER)
             return
         doc = reply["document"]
         fname = doc.get("file_name", "")
         if not fname.lower().endswith(".txt"):
             send_message(chat_id, "<b>Only .txt files accepted.</b>" + FOOTER)
             return
-        if not is_admin(user_id):
-            send_message(chat_id, "<b>Admin only.</b>" + FOOTER)
+        if not is_authorized(user_id):
+            send_message(chat_id, fmt_unauthorized())
             return
         content = download_file(doc["file_id"])
         if not content:
             send_message(chat_id, "<b>Failed to download file.</b>" + FOOTER)
             return
         proxies = [l.strip() for l in content.splitlines() if l.strip()]
-        with open(PROXIES_FILE, "w") as f:
-            f.write("\n".join(proxies))
-        send_message(chat_id, f"<b>Proxies Loaded</b>\n\n<code>{len(proxies)}</code> proxies saved." + FOOTER)
+
+        if is_admin(user_id):
+            # Admin uploads go to global proxies
+            with open(PROXIES_FILE, "w") as f:
+                f.write("\n".join(proxies))
+            send_message(chat_id, f"<b>Global Proxies Loaded</b>\n\n<code>{len(proxies)}</code> proxies saved for all users." + FOOTER)
+        else:
+            # Regular users get personal proxies
+            user_proxy_file = os.path.join(USER_PROXIES_DIR, f"{user_id}.txt")
+            with open(user_proxy_file, "w") as f:
+                f.write("\n".join(proxies))
+            send_message(chat_id, f"<b>Personal Proxies Loaded</b>\n\n<code>{len(proxies)}</code> proxies saved for your sessions." + FOOTER)
         return
 
     # --- /genkey (admin) — /genkey <limit> <duration> ---

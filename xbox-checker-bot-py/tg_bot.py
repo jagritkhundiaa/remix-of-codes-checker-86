@@ -1381,7 +1381,7 @@ def fmt_start(is_adm=False):
         "Upload a <b>.txt</b> file, then reply to it with a gate command\n\n"
         "<b>Gates:</b>\n"
         "  /auth       — Stripe Auth (Dilaboards)\n"
-        "  /autosho    — Shopify Auto (sites.txt)\n"
+        "  /autosho    — Shopify Auto (sites.txt) 🔜 Coming Soon\n"
         "  /st1        — HiAPI Check3\n"
         "  /st5        — HiAPI Check\n\n"
         "<b>Commands:</b>\n"
@@ -1796,7 +1796,7 @@ def handle_update(update):
     if text == "/gates":
         GATE_REGISTRY = [
             ("auth", "/auth", "Stripe Auth (Dilaboards)", True),
-            ("autosho", "/autosho", "Shopify Auto", True),
+            ("autosho", "/autosho", "Shopify Auto 🔜 Soon", False),
             ("st1", "/st1", "HiAPI Check3", True),
             ("st5", "/st5", "HiAPI Check", True),
         ]

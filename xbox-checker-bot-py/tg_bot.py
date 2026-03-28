@@ -1508,8 +1508,8 @@ def handle_update(update):
         return
 
     # --- /auth, /auth2, /stc (gate commands) ---
-    if text in ("/auth", "/auth2", "/stc"):
-        gate_map = {"/auth": ("auth", "Stripe Auth (Dilaboards)"), "/auth2": ("auth2", "Stripe Auth (Stormx)"), "/stc": ("stc", "PayStation Auth (NZ)")}
+    if text in ("/auth", "/auth2", "/stc", "/st1", "/st5"):
+        gate_map = {"/auth": ("auth", "Stripe Auth (Dilaboards)"), "/auth2": ("auth2", "Stripe Auth (Stormx)"), "/stc": ("stc", "PayStation Auth (NZ)"), "/st1": ("st1", "HiAPI Check3"), "/st5": ("st5", "HiAPI Check")}
         gate, gate_label = gate_map[text]
 
         if not is_authorized(user_id):

@@ -803,7 +803,7 @@ def handle_update(update):
         send_message(chat_id, f"<b>Key Generated</b>\n\n<code>{key}</code>\nDuration: <code>{dur_label}</code>\nLine Limit: <code>{limit_label}</code>{FOOTER}")
         return
 
-    # --- /genkeys <count> <duration> (admin) — bulk key generation as .txt ---
+    # --- /genkeys <count> <limit> <duration> (admin) — bulk key generation ---
     if text.startswith("/genkeys"):
         if not is_admin(user_id):
             send_message(chat_id, f"<b>Admin only.</b>{FOOTER}")
@@ -811,7 +811,7 @@ def handle_update(update):
 
         parts = text.split()
         if len(parts) < 2:
-            send_message(chat_id, "<b>Usage:</b> <code>/genkeys 10 7d</code>\nCount is required. Duration is optional (default: permanent)." + FOOTER)
+            send_message(chat_id, "<b>Usage:</b> <code>/genkeys 10 500 7d</code>\n\n  count — how many keys\n  limit — max lines per file (optional)\n  duration — key expiry (optional)" + FOOTER)
             return
 
         try:
@@ -824,14 +824,24 @@ def handle_update(update):
             send_message(chat_id, "<b>Count must be 1-500.</b>" + FOOTER)
             return
 
-        duration_str = parts[2] if len(parts) > 2 else None
+        line_limit = None
         duration_seconds = None
-        if duration_str:
-            parsed = parse_duration(duration_str)
-            if parsed == -1:
-                send_message(chat_id, "<b>Invalid duration.</b>\nExamples: 1d, 7d, 1mo, perm" + FOOTER)
-                return
-            duration_seconds = parsed
+
+        if len(parts) >= 3:
+            try:
+                line_limit = int(parts[2])
+                if len(parts) >= 4:
+                    parsed = parse_duration(parts[3])
+                    if parsed == -1:
+                        send_message(chat_id, "<b>Invalid duration.</b>\nExamples: 1d, 7d, 1mo, perm" + FOOTER)
+                        return
+                    duration_seconds = parsed
+            except ValueError:
+                parsed = parse_duration(parts[2])
+                if parsed == -1:
+                    send_message(chat_id, "<b>Invalid format.</b>\nUsage: <code>/genkeys 10 500 7d</code>" + FOOTER)
+                    return
+                duration_seconds = parsed
 
         keys = load_keys()
         generated = []
@@ -842,13 +852,14 @@ def handle_update(update):
                 "created_at": time.time(),
                 "used": False,
                 "duration": duration_seconds,
+                "line_limit": line_limit,
             }
             generated.append(key)
         save_keys(keys)
 
         dur_label = fmt_duration(duration_seconds) if duration_seconds else "Permanent"
+        limit_label = str(line_limit) if line_limit else "Unlimited"
 
-        # Send as .txt file
         filename = f"keys_{count}x_{int(time.time())}.txt"
         filepath = os.path.join(DATA_DIR, filename)
         with open(filepath, "w") as f:
@@ -857,7 +868,7 @@ def handle_update(update):
         with open(filepath, "rb") as f:
             requests.post(
                 f"{API_BASE}/sendDocument",
-                data={"chat_id": chat_id, "caption": f"<b>{count} Keys Generated</b>\nDuration: <code>{dur_label}</code>{FOOTER}", "parse_mode": "HTML"},
+                data={"chat_id": chat_id, "caption": f"<b>{count} Keys Generated</b>\nDuration: <code>{dur_label}</code>\nLine Limit: <code>{limit_label}</code>{FOOTER}", "parse_mode": "HTML"},
                 files={"document": (filename, f)}
             )
         return

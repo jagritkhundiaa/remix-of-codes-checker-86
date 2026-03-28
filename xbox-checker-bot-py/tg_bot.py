@@ -903,7 +903,7 @@ def fmt_start(is_adm=False):
     base += (
         "<b>How to use:</b>\n"
         "  1. Send a .txt file\n"
-        "  2. Reply to the file with /auth or /auth2\n"
+        "  2. Reply to the file with a gate (/auth, /st1, /st5, etc.)\n"
         "  3. Wait for results\n"
         f"{FOOTER}"
     )

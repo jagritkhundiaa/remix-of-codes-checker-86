@@ -32,6 +32,7 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 KEYS_FILE = os.path.join(DATA_DIR, "tg_keys.json")
 USERS_FILE = os.path.join(DATA_DIR, "tg_users.json")
 STATS_FILE = os.path.join(DATA_DIR, "tg_stats.json")
+ADMINS_FILE = os.path.join(DATA_DIR, "tg_admins.json")
 PROXIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxies.txt")
 
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -141,7 +142,21 @@ def generate_key():
 
 
 def is_admin(user_id):
-    return int(user_id) in ADMIN_IDS
+    uid = int(user_id)
+    if uid in ADMIN_IDS:
+        return True
+    admins = _load_json(ADMINS_FILE, {})
+    entry = admins.get(str(uid))
+    if not entry:
+        return False
+    expires_at = entry.get("expires_at")
+    if expires_at is None:
+        return True
+    if time.time() < expires_at:
+        return True
+    del admins[str(uid)]
+    _save_json(ADMINS_FILE, admins)
+    return False
 
 
 def is_authorized(user_id):
@@ -515,8 +530,8 @@ def run_processing(lines, user_id, on_progress=None, on_complete=None, threads=D
 FOOTER = f"\n{'─' * 28}\n  Made by {DEVELOPER}"
 
 
-def fmt_start():
-    return (
+def fmt_start(is_adm=False):
+    base = (
         "<b>Data Processing Bot</b>\n"
         f"{'─' * 28}\n\n"
         "Upload a <b>.txt</b> file, then reply to it with <b>/run</b>\n\n"
@@ -531,18 +546,33 @@ def fmt_start():
         "  /mykey      — Check your key info\n"
         "  /proxies    — Upload proxy file\n"
         "  /lookup     — Lookup (coming soon)\n\n"
-        "<b>Admin:</b>\n"
-        "  /genkey     — Generate single key\n"
-        "  /genkeys    — Bulk generate keys\n"
-        "  /authlist   — List authorized users\n"
-        "  /revoke     — Revoke user access\n"
-        "  /broadcast  — Message all users\n\n"
+        "<b>Gates (Admin):</b>\n"
+        "  /stripeccn  — Stripe Auth CCN (coming soon)\n"
+        "  /stripecvv  — Stripe Auth CVV (coming soon)\n"
+        "  /nonvbv     — Braintree Non-VBV (coming soon)\n"
+        "  /charge     — Stripe Checkout $3 (coming soon)\n\n"
+    )
+
+    if is_adm:
+        base += (
+            "<b>Admin:</b>\n"
+            "  /genkey     — Generate single key\n"
+            "  /genkeys    — Bulk generate keys\n"
+            "  /adminkey   — Promote user to admin\n"
+            "  /adminlist  — List all admins\n"
+            "  /authlist   — List authorized users\n"
+            "  /revoke     — Revoke user access\n"
+            "  /broadcast  — Message all users\n\n"
+        )
+
+    base += (
         "<b>How to use:</b>\n"
         "  1. Send a .txt file\n"
         "  2. Reply to the file with /run\n"
         "  3. Wait for results\n"
         f"{FOOTER}"
     )
+    return base
 
 
 def fmt_unauthorized():
@@ -729,12 +759,89 @@ def handle_update(update):
 
     # --- /start ---
     if text == "/start":
-        send_message(chat_id, fmt_start())
+        send_message(chat_id, fmt_start(is_adm=is_admin(user_id)))
         return
 
     # --- /lookup ---
     if text == "/lookup":
         send_message(chat_id, f"<b>Lookup</b>\n\nComing soon.{FOOTER}")
+        return
+
+    # --- Gate commands (admin only, coming soon) ---
+    if text in ("/stripeccn", "/stripecvv", "/nonvbv", "/charge"):
+        if not is_admin(user_id):
+            send_message(chat_id, f"<b>Admin only.</b>{FOOTER}")
+            return
+        gate_names = {
+            "/stripeccn": "Stripe Auth CCN",
+            "/stripecvv": "Stripe Auth CVV",
+            "/nonvbv": "Braintree Non-VBV",
+            "/charge": "Stripe Checkout $3",
+        }
+        name = gate_names[text]
+        send_message(chat_id, f"<b>{name}</b>\n\nComing soon.{FOOTER}")
+        return
+
+    # --- /adminkey <user_id> <duration> (owner only) ---
+    if text.startswith("/adminkey"):
+        if int(user_id) not in ADMIN_IDS:
+            send_message(chat_id, f"<b>Owner only.</b>{FOOTER}")
+            return
+        parts = text.split()
+        if len(parts) < 2:
+            send_message(chat_id, "<b>Usage:</b> <code>/adminkey 123456789 7d</code>\nDuration optional (default: permanent)." + FOOTER)
+            return
+        target_id = parts[1].strip()
+        if not target_id.isdigit():
+            send_message(chat_id, "<b>Invalid user ID.</b>" + FOOTER)
+            return
+        duration_seconds = None
+        if len(parts) >= 3:
+            parsed = parse_duration(parts[2])
+            if parsed == -1:
+                send_message(chat_id, "<b>Invalid duration.</b>\nExamples: 7d, 1mo, perm" + FOOTER)
+                return
+            duration_seconds = parsed
+        admins = _load_json(ADMINS_FILE, {})
+        entry = {"promoted_by": user_id, "promoted_at": time.time()}
+        if duration_seconds is not None:
+            entry["expires_at"] = time.time() + duration_seconds
+        else:
+            entry["expires_at"] = None
+        admins[target_id] = entry
+        _save_json(ADMINS_FILE, admins)
+        dur_label = fmt_duration(duration_seconds) if duration_seconds else "Permanent"
+        send_message(chat_id, f"<b>Admin Granted</b>\n\nUser <code>{target_id}</code>\nDuration: <code>{dur_label}</code>{FOOTER}")
+        return
+
+    # --- /adminlist (owner only) ---
+    if text == "/adminlist":
+        if int(user_id) not in ADMIN_IDS:
+            send_message(chat_id, f"<b>Owner only.</b>{FOOTER}")
+            return
+        admins = _load_json(ADMINS_FILE, {})
+        lines_out = []
+        now = time.time()
+        for uid, entry in admins.items():
+            expires_at = entry.get("expires_at")
+            if expires_at is None:
+                exp = "Permanent"
+            elif now > expires_at:
+                exp = "EXPIRED"
+            else:
+                remaining = int(expires_at - now)
+                exp = fmt_duration(remaining) + " left"
+            lines_out.append(f"  {uid} | {exp}")
+        # Add hardcoded owner IDs
+        for oid in ADMIN_IDS:
+            lines_out.insert(0, f"  {oid} | Owner (permanent)")
+        msg_text = (
+            f"<b>Admins ({len(lines_out)})</b>\n"
+            f"{'─' * 28}\n\n"
+            "<code>" + "\n".join(lines_out) + "</code>"
+            + FOOTER
+        )
+        send_message(chat_id, msg_text)
         return
 
     # --- /stats ---

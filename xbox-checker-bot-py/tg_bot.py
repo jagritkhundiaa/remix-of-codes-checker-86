@@ -166,6 +166,12 @@ def probe_gate(gate_key):
             resp = requests.get('https://ck.hiapi.club/', headers={'User-Agent': _rand_ua()}, timeout=10)
             alive = resp.status_code in (200, 403)
             detail = f"HTTP {resp.status_code}"
+        elif gate_key == "autosho":
+            resp = requests.get('https://teamoicxkiller.online/code/index.php', headers={'User-Agent': _rand_ua()}, timeout=10)
+            alive = resp.status_code in (200, 400, 403)
+            sites = load_shopify_sites() if 'load_shopify_sites' in dir() else []
+            site_count = len(sites) if sites else 0
+            detail = f"HTTP {resp.status_code} | {site_count} sites loaded"
         else:
             return False, 0, "Unknown gate"
 

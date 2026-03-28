@@ -1329,6 +1329,34 @@ def handle_update(update):
         send_message(chat_id, msg_text)
         return
 
+    # --- /gates ---
+    if text == "/gates":
+        GATE_REGISTRY = [
+            ("auth", "/auth", "Stripe Auth (Dilaboards)", True),
+            ("auth2", "/auth2", "Stripe Auth (Stormx)", True),
+            ("stc", "/stc", "PayStation Auth (NZ)", True),
+            ("st1", "/st1", "HiAPI Check3", True),
+            ("st5", "/st5", "HiAPI Check", True),
+            ("charge", "/charge", "Stripe Charge $1-3", True),
+            ("nonvbv", "/nonvbv", "Braintree Non-VBV", False),
+        ]
+        gs = load_gate_stats()
+        lines_out = ["<b>Available Gates</b>\n"]
+        for key, cmd, label, live in GATE_REGISTRY:
+            status_icon = "🟢" if live else "🔴"
+            status_text = "Live" if live else "Soon"
+            s = gs.get(key, {})
+            total = s.get("total", 0)
+            approved = s.get("approved", 0)
+            rate = round((approved / total) * 100, 1) if total > 0 else 0
+            lines_out.append(
+                f"{status_icon} <code>{cmd}</code> — {label}\n"
+                f"    {status_text} | {total} checked | {approved} hits | {rate}% rate"
+            )
+        lines_out.append(FOOTER)
+        send_message(chat_id, "\n".join(lines_out))
+        return
+
     # --- /stats ---
     if text == "/stats":
         send_message(chat_id, fmt_stats(user_id))

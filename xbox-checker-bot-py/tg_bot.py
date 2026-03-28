@@ -407,7 +407,9 @@ def run_automated_process(card_num, card_cvv, card_yy, card_mm, proxies=None):
     except Exception as e:
         return f"Error: {str(e)}"
 
-# ============================================================
+DEFAULT_THREADS = 3
+
+
 #  ST1 Gate — hiapi checker
 # ============================================================
 ST1_API_URL = "https://ck.hiapi.club/api/check3"
@@ -593,7 +595,6 @@ def process_single_entry(entry, proxies_list, user_id):
 # ============================================================
 #  Processing runner with multi-threading + rate-limited progress
 # ============================================================
-DEFAULT_THREADS = 3
 
 
 def run_processing(lines, user_id, on_progress=None, on_complete=None, threads=DEFAULT_THREADS):

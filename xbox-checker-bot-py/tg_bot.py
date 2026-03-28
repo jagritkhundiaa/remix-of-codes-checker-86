@@ -1759,6 +1759,7 @@ def handle_update(update):
             def on_complete(results):
                 cancel_flags.pop(user_id, None)
                 update_user_stats(user_id, results)
+                update_gate_stats(gate, results)
 
                 if progress_msg_id:
                     edit_message(

@@ -33,6 +33,7 @@ KEYS_FILE = os.path.join(DATA_DIR, "tg_keys.json")
 USERS_FILE = os.path.join(DATA_DIR, "tg_users.json")
 STATS_FILE = os.path.join(DATA_DIR, "tg_stats.json")
 ADMINS_FILE = os.path.join(DATA_DIR, "tg_admins.json")
+GATE_STATS_FILE = os.path.join(DATA_DIR, "tg_gate_stats.json")
 PROXIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxies.txt")
 USER_PROXIES_DIR = os.path.join(DATA_DIR, "user_proxies")
 
@@ -95,6 +96,24 @@ def update_user_stats(user_id, results):
     stats[uid]["total"] += results.get("total", 0)
     stats[uid]["sessions"] += 1
     save_stats(stats)
+
+
+def load_gate_stats():
+    return _load_json(GATE_STATS_FILE, {})
+
+def save_gate_stats(data):
+    _save_json(GATE_STATS_FILE, data)
+
+def update_gate_stats(gate, results):
+    gs = load_gate_stats()
+    if gate not in gs:
+        gs[gate] = {"approved": 0, "declined": 0, "errors": 0, "total": 0, "sessions": 0}
+    gs[gate]["approved"] += results.get("approved", 0)
+    gs[gate]["declined"] += results.get("declined", 0)
+    gs[gate]["errors"] += results.get("errors", 0)
+    gs[gate]["total"] += results.get("total", 0)
+    gs[gate]["sessions"] += 1
+    save_gate_stats(gs)
 
 
 # ============================================================
@@ -1019,6 +1038,7 @@ def fmt_start(is_adm=False):
         "  /bin        — Set BIN filter\n"
         "  /clearbin   — Clear BIN filter\n"
         "  /cancel     — Stop active task\n"
+        "  /gates      — List all gates & hit rates\n"
         "  /stats      — Your lifetime stats\n"
         "  /mykey      — Check your key info\n"
         "  /proxies    — Upload proxy file\n"
@@ -1308,6 +1328,34 @@ def handle_update(update):
             + FOOTER
         )
         send_message(chat_id, msg_text)
+        return
+
+    # --- /gates ---
+    if text == "/gates":
+        GATE_REGISTRY = [
+            ("auth", "/auth", "Stripe Auth (Dilaboards)", True),
+            ("auth2", "/auth2", "Stripe Auth (Stormx)", True),
+            ("stc", "/stc", "PayStation Auth (NZ)", True),
+            ("st1", "/st1", "HiAPI Check3", True),
+            ("st5", "/st5", "HiAPI Check", True),
+            ("charge", "/charge", "Stripe Charge $1-3", True),
+            ("nonvbv", "/nonvbv", "Braintree Non-VBV", False),
+        ]
+        gs = load_gate_stats()
+        lines_out = ["<b>Available Gates</b>\n"]
+        for key, cmd, label, live in GATE_REGISTRY:
+            status_icon = "🟢" if live else "🔴"
+            status_text = "Live" if live else "Soon"
+            s = gs.get(key, {})
+            total = s.get("total", 0)
+            approved = s.get("approved", 0)
+            rate = round((approved / total) * 100, 1) if total > 0 else 0
+            lines_out.append(
+                f"{status_icon} <code>{cmd}</code> — {label}\n"
+                f"    {status_text} | {total} checked | {approved} hits | {rate}% rate"
+            )
+        lines_out.append(FOOTER)
+        send_message(chat_id, "\n".join(lines_out))
         return
 
     # --- /stats ---
@@ -1740,6 +1788,7 @@ def handle_update(update):
             def on_complete(results):
                 cancel_flags.pop(user_id, None)
                 update_user_stats(user_id, results)
+                update_gate_stats(gate, results)
 
                 if progress_msg_id:
                     edit_message(

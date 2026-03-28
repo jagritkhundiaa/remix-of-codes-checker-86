@@ -764,14 +764,9 @@ def handle_update(update):
         send_message(chat_id, f"<b>Lookup</b>\n\nComing soon.{FOOTER}")
         return
 
-    # --- Gate commands (admin only, coming soon) ---
-    if text in ("/stripeccn", "/stripecvv", "/nonvbv", "/charge"):
-        if not is_admin(user_id):
-            send_message(chat_id, f"<b>Admin only.</b>{FOOTER}")
-            return
+    # --- Gate commands (coming soon) ---
+    if text in ("/nonvbv", "/charge"):
         gate_names = {
-            "/stripeccn": "Stripe Auth CCN",
-            "/stripecvv": "Stripe Auth CVV",
             "/nonvbv": "Braintree Non-VBV",
             "/charge": "Stripe Checkout $3",
         }

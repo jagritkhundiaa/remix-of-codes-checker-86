@@ -1178,7 +1178,7 @@ def process_single_entry(entry, proxies_list, user_id, gate="auth"):
 # ============================================================
 #  Processing runner with multi-threading + rate-limited progress
 # ============================================================
-DEFAULT_THREADS = 50
+DEFAULT_THREADS = 5
 
 
 def run_processing(lines, user_id, on_progress=None, on_complete=None, threads=DEFAULT_THREADS, gate="auth"):

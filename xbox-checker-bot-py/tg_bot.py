@@ -1218,7 +1218,14 @@ def fmt_start(is_adm=False):
             "  /adminlist  — List all admins\n"
             "  /authlist   — List authorized users\n"
             "  /revoke     — Revoke user access\n"
-            "  /broadcast  — Message all users\n\n"
+            "  /broadcast  — Message all users\n"
+            "  /chkapis    — Health check all APIs\n"
+            "  /chkapiauth — Check auth gate\n"
+            "  /chkapiauth2— Check auth2 gate\n"
+            "  /chkapistc  — Check stc gate\n"
+            "  /chkapist1  — Check st1 gate\n"
+            "  /chkapist5  — Check st5 gate\n"
+            "  /chkapicharge— Check charge gate\n\n"
         )
 
     base += (

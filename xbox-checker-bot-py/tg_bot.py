@@ -1854,6 +1854,7 @@ def handle_update(update):
     chkapi_cmds = {
         "/chkapiauth": "auth",
         "/chkapib3": "b3",
+        "/chkapib3auth": "b3auth",
         "/chkapiautosho": "autosho",
         "/chkapist1": "st1",
         "/chkapist5": "st5",

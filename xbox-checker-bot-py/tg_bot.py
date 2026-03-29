@@ -16,6 +16,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 from braintree_checker import check_card as b3_check_card
 from braintree_auth_checker import check_card as b3auth_check_card, probe_site as b3auth_probe_site
+from authnet_checker import check_card as authnet_check_card, probe_site as authnet_probe_site
 
 try:
     from faker import Faker

@@ -1529,6 +1529,8 @@ def fmt_start(is_adm=False):
         "<b>Gates:</b>\n"
         "  /auth       — Stripe Auth (Dilaboards)\n"
         "  /b3         — Braintree Auth\n"
+        "  /b3auth     — Braintree Auth (Session)\n"
+        "  /authnet    — Authorize.net\n"
         "  /autosho    — Shopify Auto (sites.txt) 🔜 Coming Soon\n"
         "  /st1        — HiAPI Check3\n"
         "  /st5        — HiAPI Check\n\n"

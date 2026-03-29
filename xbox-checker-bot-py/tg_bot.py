@@ -340,10 +340,18 @@ API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 
 def tg_request(method, **kwargs):
+    """Telegram API request — tries proxy first, falls back to direct."""
+    proxy = get_proxy()
     try:
-        r = requests.post(f"{API_BASE}/{method}", json=kwargs, timeout=30, proxies=get_proxy())
+        r = requests.post(f"{API_BASE}/{method}", json=kwargs, timeout=30, proxies=proxy)
         return r.json()
     except Exception:
+        if proxy:
+            try:
+                r = requests.post(f"{API_BASE}/{method}", json=kwargs, timeout=30)
+                return r.json()
+            except Exception:
+                pass
         return {}
 
 
@@ -381,14 +389,44 @@ def get_file_url(file_id):
 
 
 def download_file(file_id):
+    """Download file — tries proxy first, falls back to direct."""
     url = get_file_url(file_id)
     if not url:
         return None
+    proxy = get_proxy()
     try:
-        r = requests.get(url, timeout=30, proxies=get_proxy())
+        r = requests.get(url, timeout=30, proxies=proxy)
         return r.text
     except Exception:
+        if proxy:
+            try:
+                r = requests.get(url, timeout=30)
+                return r.text
+            except Exception:
+                pass
         return None
+
+
+def send_document(chat_id, filepath, filename=None, caption=None):
+    """Send a document via Telegram — proxy with direct fallback."""
+    fname = filename or os.path.basename(filepath)
+    data = {"chat_id": chat_id}
+    if caption:
+        data["caption"] = caption
+        data["parse_mode"] = "HTML"
+    proxy = get_proxy()
+    try:
+        with open(filepath, "rb") as f:
+            requests.post(f"{API_BASE}/sendDocument", data=data,
+                          files={"document": (fname, f)}, proxies=proxy, timeout=30)
+    except Exception:
+        if proxy:
+            try:
+                with open(filepath, "rb") as f:
+                    requests.post(f"{API_BASE}/sendDocument", data=data,
+                                  files={"document": (fname, f)}, timeout=30)
+            except Exception:
+                pass
 
 
 # ============================================================
@@ -1993,13 +2031,8 @@ def handle_update(update):
         with open(filepath, "w") as f:
             for k in generated:
                 f.write(k + "\n")
-        with open(filepath, "rb") as f:
-            requests.post(
-                f"{API_BASE}/sendDocument",
-                data={"chat_id": chat_id, "caption": f"<b>{count} Keys Generated</b>\nDuration: <code>{dur_label}</code>\nLine Limit: <code>{limit_label}</code>{FOOTER}", "parse_mode": "HTML"},
-                files={"document": (filename, f)},
-                proxies=get_proxy()
-            )
+        send_document(chat_id, filepath, filename,
+            caption=f"<b>{count} Keys Generated</b>\nDuration: <code>{dur_label}</code>\nLine Limit: <code>{limit_label}</code>{FOOTER}")
         return
 
     # --- /revoke <user_id> (admin) ---
@@ -2274,13 +2307,7 @@ def handle_update(update):
                     with open(filepath, "w") as f:
                         for entry in results["approved_list"]:
                             f.write(entry + "\n")
-                    with open(filepath, "rb") as f:
-                        requests.post(
-                            f"{API_BASE}/sendDocument",
-                            data={"chat_id": chat_id},
-                            files={"document": f},
-                            proxies=get_proxy()
-                        )
+                    send_document(chat_id, filepath)
 
                 with active_lock:
                     active_users.discard(user_id)

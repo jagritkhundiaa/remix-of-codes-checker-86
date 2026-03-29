@@ -1562,6 +1562,7 @@ def fmt_start(is_adm=False):
         "  <b>Single:</b> <code>/auth 4111...|01|25|123</code>\n"
         "  <b>Bulk:</b> Send .txt → reply with /auth\n"
         "  <b>Braintree:</b> <code>/b3 4111...|01|25|123</code>\n"
+        "  <b>Authorize:</b> <code>/authnet 4111...|01|2025|123</code>\n"
         "  <b>Shopify:</b> <code>/autosho 4111...|01|25|123</code>\n"
         f"{FOOTER}"
     )

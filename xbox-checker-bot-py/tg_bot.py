@@ -1344,18 +1344,8 @@ DEFAULT_THREADS = 5
 
 
 def run_processing(lines, user_id, on_progress=None, on_complete=None, threads=DEFAULT_THREADS, gate="auth"):
-    # Load global proxies
-    proxies_list = []
-    if os.path.exists(PROXIES_FILE):
-        with open(PROXIES_FILE, 'r') as f:
-            proxies_list = [line.strip() for line in f if line.strip()]
-
-    # Load user's personal proxies and merge
-    user_proxy_file = os.path.join(USER_PROXIES_DIR, f"{user_id}.txt")
-    if os.path.exists(user_proxy_file):
-        with open(user_proxy_file, 'r') as f:
-            personal = [line.strip() for line in f if line.strip()]
-            proxies_list = proxies_list + personal
+    # Use global proxy pool
+    proxies_list = list(_global_proxies) if _global_proxies else []
 
     total = len(lines)
     results = {"approved": 0, "declined": 0, "errors": 0, "skipped": 0, "total": total, "approved_list": []}

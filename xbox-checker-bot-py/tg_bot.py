@@ -1504,6 +1504,7 @@ def fmt_start(is_adm=False):
         "Upload a <b>.txt</b> file, then reply to it with a gate command\n\n"
         "<b>Gates:</b>\n"
         "  /auth       — Stripe Auth (Dilaboards)\n"
+        "  /b3         — Braintree Auth\n"
         "  /autosho    — Shopify Auto (sites.txt) 🔜 Coming Soon\n"
         "  /st1        — HiAPI Check3\n"
         "  /st5        — HiAPI Check\n\n"

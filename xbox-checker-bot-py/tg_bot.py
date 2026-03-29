@@ -470,8 +470,20 @@ def auto_request(
     }
 
     request_kwargs = {k: v for k, v in request_kwargs.items() if v is not None}
-    response = req_session.request(method, **request_kwargs)
-    return response
+
+    try:
+        response = req_session.request(method, **request_kwargs)
+        return response
+    except requests.exceptions.ProxyError:
+        if proxies:
+            fallback_kwargs = {k: v for k, v in request_kwargs.items() if k != 'proxies'}
+            return req_session.request(method, **fallback_kwargs)
+        raise
+    except requests.exceptions.ConnectionError as e:
+        if proxies and any(msg in str(e) for msg in ('Tunnel connection failed', '503 Service Unavailable', 'ProxyError', 'Unable to connect to proxy')):
+            fallback_kwargs = {k: v for k, v in request_kwargs.items() if k != 'proxies'}
+            return req_session.request(method, **fallback_kwargs)
+        raise
 
 
 def extract_message(response: requests.Response) -> str:
@@ -778,14 +790,13 @@ def _retry_request(func, max_retries=2, backoff=2):
     for attempt in range(max_retries + 1):
         try:
             result = func()
-            # If we got a response object, check for 429
             if hasattr(result, 'status_code') and result.status_code == 429:
                 wait = backoff * (attempt + 1)
                 time.sleep(wait)
                 last_err = f"HTTP 429 (rate limited)"
                 continue
             return result
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.ReadTimeout) as e:
+        except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.ReadTimeout) as e:
             last_err = str(e)
             if attempt < max_retries:
                 time.sleep(backoff * (attempt + 1))

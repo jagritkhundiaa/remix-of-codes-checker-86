@@ -37,10 +37,55 @@ GATE_STATS_FILE = os.path.join(DATA_DIR, "tg_gate_stats.json")
 GATE_STATUS_FILE = os.path.join(DATA_DIR, "tg_gate_status.json")
 PROXIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxies.txt")
 SITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sites.txt")
-USER_PROXIES_DIR = os.path.join(DATA_DIR, "user_proxies")
 
 os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(USER_PROXIES_DIR, exist_ok=True)
+
+# ============================================================
+#  Global proxy pool — loaded from proxies.txt on startup
+#  Supports: http, https, socks4, socks5
+#  Formats: protocol://user:pass@host:port, host:port,
+#           user:pass@host:port, host:port:user:pass, etc.
+# ============================================================
+_global_proxies = []
+_proxy_index = 0
+_proxy_lock = threading.Lock()
+
+
+def load_global_proxies():
+    """Load proxies from proxies.txt into the global pool."""
+    global _global_proxies, _proxy_index
+    if not os.path.exists(PROXIES_FILE):
+        print("[Proxy] No proxies.txt found — running direct.")
+        _global_proxies = []
+        return 0
+    with open(PROXIES_FILE, 'r') as f:
+        raw = [l.strip() for l in f if l.strip() and not l.strip().startswith('#')]
+    _global_proxies = raw
+    _proxy_index = 0
+    print(f"[Proxy] Loaded {len(_global_proxies)} proxies from proxies.txt")
+    return len(_global_proxies)
+
+
+def get_proxy():
+    """Get next proxy dict from the global pool (round-robin). Returns None if no proxies."""
+    global _proxy_index
+    if not _global_proxies:
+        return None
+    with _proxy_lock:
+        proxy_str = _global_proxies[_proxy_index % len(_global_proxies)]
+        _proxy_index += 1
+    return format_proxy(proxy_str)
+
+
+def get_random_proxy():
+    """Get a random proxy dict from the global pool. Returns None if no proxies."""
+    if not _global_proxies:
+        return None
+    return format_proxy(random.choice(_global_proxies))
+
+
+def get_proxy_count():
+    return len(_global_proxies)
 
 # ============================================================
 #  Persistence — Keys, Users, Stats

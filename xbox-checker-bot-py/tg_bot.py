@@ -340,10 +340,18 @@ API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 
 def tg_request(method, **kwargs):
+    """Telegram API request — tries proxy first, falls back to direct."""
+    proxy = get_proxy()
     try:
-        r = requests.post(f"{API_BASE}/{method}", json=kwargs, timeout=30, proxies=get_proxy())
+        r = requests.post(f"{API_BASE}/{method}", json=kwargs, timeout=30, proxies=proxy)
         return r.json()
     except Exception:
+        if proxy:
+            try:
+                r = requests.post(f"{API_BASE}/{method}", json=kwargs, timeout=30)
+                return r.json()
+            except Exception:
+                pass
         return {}
 
 
@@ -381,13 +389,21 @@ def get_file_url(file_id):
 
 
 def download_file(file_id):
+    """Download file — tries proxy first, falls back to direct."""
     url = get_file_url(file_id)
     if not url:
         return None
+    proxy = get_proxy()
     try:
-        r = requests.get(url, timeout=30, proxies=get_proxy())
+        r = requests.get(url, timeout=30, proxies=proxy)
         return r.text
     except Exception:
+        if proxy:
+            try:
+                r = requests.get(url, timeout=30)
+                return r.text
+            except Exception:
+                pass
         return None
 
 

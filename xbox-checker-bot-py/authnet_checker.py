@@ -120,7 +120,7 @@ def _process_card(cc, mm, yy, cvv, proxy_dict=None):
             f"&ctl00%24ctl05%24search=&ctl00%24ctl07%24txtSearch="
             f"&ctl00%24ctl08%24manufacturers=Select+..."
             f"&ctl00%24pageContent%24productDetailsID={product_id}"
-            f"&ctl00%24pageContent%24txtQuantity=1"
+            f"&ctl00%24pageContent%24txtQuantity=10"
             f"&ctl00%24pageContent%24addToCart.x=62"
             f"&ctl00%24pageContent%24addToCart.y=14"
             f"&ctl00%24ctl19%24mailingList%24txtEmail="

@@ -16,6 +16,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 from braintree_checker import check_card as b3_check_card
 from braintree_auth_checker import check_card as b3auth_check_card, probe_site as b3auth_probe_site
+from authnet_checker import check_card as authnet_check_card, probe_site as authnet_probe_site
 
 try:
     from faker import Faker
@@ -196,6 +197,7 @@ GATE_PROBE_MAP = {
     "auth": {"name": "Stripe Auth (Dilaboards)", "cmd": "/chkapiauth"},
     "b3": {"name": "Braintree Auth", "cmd": "/chkapib3"},
     "b3auth": {"name": "Braintree Auth (Session)", "cmd": "/chkapib3auth"},
+    "authnet": {"name": "Authorize.net", "cmd": "/chkapiauthnet"},
     "st1": {"name": "HiAPI Check3", "cmd": "/chkapist1"},
     "st5": {"name": "HiAPI Check", "cmd": "/chkapist5"},
     "autosho": {"name": "Shopify Auto", "cmd": "/chkapiautosho"},
@@ -227,6 +229,8 @@ def probe_gate(gate_key):
             detail = f"HTTP {resp.status_code}" + (" | Braintree key found" if alive else " | No Braintree key")
         elif gate_key == "b3auth":
             alive, detail = b3auth_probe_site()
+        elif gate_key == "authnet":
+            alive, detail = authnet_probe_site()
         elif gate_key == "autosho":
             resp = requests.get('https://teamoicxkiller.online/code/index.php', headers={'User-Agent': _rand_ua()}, timeout=10, proxies=proxy)
             alive = resp.status_code in (200, 400, 403)
@@ -1376,6 +1380,9 @@ def _run_gate(gate, c_num, c_mm, c_yy, c_cvv, proxy_dict):
     elif gate == "b3auth":
         cc_line = f"{c_num}|{c_mm}|{c_yy}|{c_cvv}"
         return b3auth_check_card(cc_line, proxy_dict)
+    elif gate == "authnet":
+        cc_line = f"{c_num}|{c_mm}|{c_yy}|{c_cvv}"
+        return authnet_check_card(cc_line, proxy_dict)
     elif gate == "st1":
         return check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check3", proxy_dict)
     elif gate == "st5":
@@ -1522,6 +1529,8 @@ def fmt_start(is_adm=False):
         "<b>Gates:</b>\n"
         "  /auth       — Stripe Auth (Dilaboards)\n"
         "  /b3         — Braintree Auth\n"
+        "  /b3auth     — Braintree Auth (Session)\n"
+        "  /authnet    — Authorize.net\n"
         "  /autosho    — Shopify Auto (sites.txt) 🔜 Coming Soon\n"
         "  /st1        — HiAPI Check3\n"
         "  /st5        — HiAPI Check\n\n"
@@ -1553,6 +1562,7 @@ def fmt_start(is_adm=False):
         "  <b>Single:</b> <code>/auth 4111...|01|25|123</code>\n"
         "  <b>Bulk:</b> Send .txt → reply with /auth\n"
         "  <b>Braintree:</b> <code>/b3 4111...|01|25|123</code>\n"
+        "  <b>Authorize:</b> <code>/authnet 4111...|01|2025|123</code>\n"
         "  <b>Shopify:</b> <code>/autosho 4111...|01|25|123</code>\n"
         f"{FOOTER}"
     )
@@ -1857,6 +1867,7 @@ def handle_update(update):
         "/chkapiauth": "auth",
         "/chkapib3": "b3",
         "/chkapib3auth": "b3auth",
+        "/chkapiauthnet": "authnet",
         "/chkapiautosho": "autosho",
         "/chkapist1": "st1",
         "/chkapist5": "st5",
@@ -1941,6 +1952,7 @@ def handle_update(update):
             ("auth", "/auth", "Stripe Auth (Dilaboards)", True),
             ("b3", "/b3", "Braintree Auth", True),
             ("b3auth", "/b3auth", "Braintree Auth (Session)", True),
+            ("authnet", "/authnet", "Authorize.net", True),
             ("autosho", "/autosho", "Shopify Auto 🔜 Soon", False),
             ("st1", "/st1", "HiAPI Check3", True),
             ("st5", "/st5", "HiAPI Check", True),
@@ -2200,7 +2212,7 @@ def handle_update(update):
         return
 
     # --- Gate commands: /auth, /st1, /st5 (single card OR bulk file) ---
-    gate_map = {"/auth": ("auth", "Stripe Auth (Dilaboards)"), "/b3": ("b3", "Braintree Auth"), "/b3auth": ("b3auth", "Braintree Auth (Session)"), "/autosho": ("autosho", "Shopify Auto"), "/st1": ("st1", "HiAPI Check3"), "/st5": ("st5", "HiAPI Check")}
+    gate_map = {"/auth": ("auth", "Stripe Auth (Dilaboards)"), "/b3": ("b3", "Braintree Auth"), "/b3auth": ("b3auth", "Braintree Auth (Session)"), "/authnet": ("authnet", "Authorize.net"), "/autosho": ("autosho", "Shopify Auto"), "/st1": ("st1", "HiAPI Check3"), "/st5": ("st5", "HiAPI Check")}
     cmd_base = text.split()[0] if text else ""
     if cmd_base in gate_map:
         gate, gate_label = gate_map[cmd_base]

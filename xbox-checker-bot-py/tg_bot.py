@@ -2031,13 +2031,8 @@ def handle_update(update):
         with open(filepath, "w") as f:
             for k in generated:
                 f.write(k + "\n")
-        with open(filepath, "rb") as f:
-            requests.post(
-                f"{API_BASE}/sendDocument",
-                data={"chat_id": chat_id, "caption": f"<b>{count} Keys Generated</b>\nDuration: <code>{dur_label}</code>\nLine Limit: <code>{limit_label}</code>{FOOTER}", "parse_mode": "HTML"},
-                files={"document": (filename, f)},
-                proxies=get_proxy()
-            )
+        send_document(chat_id, filepath, filename,
+            caption=f"<b>{count} Keys Generated</b>\nDuration: <code>{dur_label}</code>\nLine Limit: <code>{limit_label}</code>{FOOTER}")
         return
 
     # --- /revoke <user_id> (admin) ---

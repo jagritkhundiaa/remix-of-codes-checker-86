@@ -1356,7 +1356,10 @@ def check_cc_shopify(cc_number, month, year, cvv, proxies=None):
 
 def _run_gate(gate, c_num, c_mm, c_yy, c_cvv, proxy_dict):
     """Run the appropriate gate checker."""
-    if gate == "st1":
+    if gate == "b3":
+        cc_line = f"{c_num}|{c_mm}|{c_yy}|{c_cvv}"
+        return b3_check_card(cc_line, proxy_dict)
+    elif gate == "st1":
         return check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check3", proxy_dict)
     elif gate == "st5":
         return check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check", proxy_dict)

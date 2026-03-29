@@ -340,7 +340,7 @@ API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 def tg_request(method, **kwargs):
     try:
-        r = requests.post(f"{API_BASE}/{method}", json=kwargs, timeout=30)
+        r = requests.post(f"{API_BASE}/{method}", json=kwargs, timeout=30, proxies=get_proxy())
         return r.json()
     except Exception:
         return {}

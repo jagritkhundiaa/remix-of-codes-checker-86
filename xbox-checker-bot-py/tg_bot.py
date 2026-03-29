@@ -1342,6 +1342,18 @@ def check_cc_shopify(cc_number, month, year, cvv, proxies=None):
     return f"⚠️ Shopify Failed | {last_error} ({process_time}s)"
 
 
+def _run_gate(gate, c_num, c_mm, c_yy, c_cvv, proxy_dict):
+    """Run the appropriate gate checker."""
+    if gate == "st1":
+        return check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check3", proxy_dict)
+    elif gate == "st5":
+        return check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check", proxy_dict)
+    elif gate == "autosho":
+        return check_cc_shopify(c_num, c_mm, c_yy, c_cvv, proxy_dict)
+    else:
+        return run_automated_process(c_num, c_cvv, c_yy, c_mm, proxy_dict)
+
+
 def process_single_entry(entry, proxies_list, user_id, gate="auth"):
     raw_proxy = random.choice(proxies_list) if proxies_list else None
     proxy_dict = format_proxy(raw_proxy)
@@ -1358,14 +1370,24 @@ def process_single_entry(entry, proxies_list, user_id, gate="auth"):
                 if not any(c_num.startswith(b) for b in user_bin_list):
                     return "SKIPPED | BIN not allowed"
 
-            if gate == "st1":
-                result = check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check3", proxy_dict)
-            elif gate == "st5":
-                result = check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check", proxy_dict)
-            elif gate == "autosho":
-                result = check_cc_shopify(c_num, c_mm, c_yy, c_cvv, proxy_dict)
-            else:
-                result = run_automated_process(c_num, c_cvv, c_yy, c_mm, proxy_dict)
+            try:
+                result = _run_gate(gate, c_num, c_mm, c_yy, c_cvv, proxy_dict)
+            except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as e:
+                if proxy_dict:
+                    # Proxy failed — retry without proxy
+                    try:
+                        result = _run_gate(gate, c_num, c_mm, c_yy, c_cvv, None)
+                    except Exception as e2:
+                        result = f"Error: {str(e2)}"
+                else:
+                    result = f"Error: {str(e)}"
+
+            # Also catch proxy errors embedded in result strings
+            if proxy_dict and "ProxyError" in result or "Tunnel connection failed" in result or "503 Service Unavailable" in result:
+                try:
+                    result = _run_gate(gate, c_num, c_mm, c_yy, c_cvv, None)
+                except Exception as e2:
+                    result = f"Error: {str(e2)}"
         else:
             result = "Error: Invalid Format"
 

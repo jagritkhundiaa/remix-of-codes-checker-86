@@ -15,7 +15,7 @@ logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
 SITE_URL = "https://compressedairpartscompany.com"
-PRODUCT_URL = f"{SITE_URL}/57017-egardnerdenveroemstatorshim010mmshim5seriesamber.aspx"
+PRODUCT_URL = f"{SITE_URL}/00521-007spreplacementsullivanpalatekairfilter.aspx"
 CHECKOUT_URL = f"{SITE_URL}/checkout.aspx"
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.149 Safari/537.36"

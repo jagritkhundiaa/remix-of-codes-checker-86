@@ -37,10 +37,55 @@ GATE_STATS_FILE = os.path.join(DATA_DIR, "tg_gate_stats.json")
 GATE_STATUS_FILE = os.path.join(DATA_DIR, "tg_gate_status.json")
 PROXIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxies.txt")
 SITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sites.txt")
-USER_PROXIES_DIR = os.path.join(DATA_DIR, "user_proxies")
 
 os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(USER_PROXIES_DIR, exist_ok=True)
+
+# ============================================================
+#  Global proxy pool — loaded from proxies.txt on startup
+#  Supports: http, https, socks4, socks5
+#  Formats: protocol://user:pass@host:port, host:port,
+#           user:pass@host:port, host:port:user:pass, etc.
+# ============================================================
+_global_proxies = []
+_proxy_index = 0
+_proxy_lock = threading.Lock()
+
+
+def load_global_proxies():
+    """Load proxies from proxies.txt into the global pool."""
+    global _global_proxies, _proxy_index
+    if not os.path.exists(PROXIES_FILE):
+        print("[Proxy] No proxies.txt found — running direct.")
+        _global_proxies = []
+        return 0
+    with open(PROXIES_FILE, 'r') as f:
+        raw = [l.strip() for l in f if l.strip() and not l.strip().startswith('#')]
+    _global_proxies = raw
+    _proxy_index = 0
+    print(f"[Proxy] Loaded {len(_global_proxies)} proxies from proxies.txt")
+    return len(_global_proxies)
+
+
+def get_proxy():
+    """Get next proxy dict from the global pool (round-robin). Returns None if no proxies."""
+    global _proxy_index
+    if not _global_proxies:
+        return None
+    with _proxy_lock:
+        proxy_str = _global_proxies[_proxy_index % len(_global_proxies)]
+        _proxy_index += 1
+    return format_proxy(proxy_str)
+
+
+def get_random_proxy():
+    """Get a random proxy dict from the global pool. Returns None if no proxies."""
+    if not _global_proxies:
+        return None
+    return format_proxy(random.choice(_global_proxies))
+
+
+def get_proxy_count():
+    return len(_global_proxies)
 
 # ============================================================
 #  Persistence — Keys, Users, Stats
@@ -156,18 +201,19 @@ GATE_PROBE_MAP = {
 def probe_gate(gate_key):
     """Probe a gate's underlying API. Returns (alive: bool, latency_ms: int, detail: str)."""
     start = time.time()
+    proxy = get_proxy()
     try:
         if gate_key == "auth":
             resp = requests.get('https://dilaboards.com/en/moj-racun/add-payment-method/',
-                                headers={'User-Agent': _rand_ua()}, timeout=10, allow_redirects=True)
+                                headers={'User-Agent': _rand_ua()}, timeout=10, allow_redirects=True, proxies=proxy)
             alive = resp.status_code == 200 and 'stripe' in resp.text.lower()
             detail = f"HTTP {resp.status_code}" + (" | Stripe key found" if alive else " | No Stripe key")
         elif gate_key in ("st1", "st5"):
-            resp = requests.get('https://ck.hiapi.club/', headers={'User-Agent': _rand_ua()}, timeout=10)
+            resp = requests.get('https://ck.hiapi.club/', headers={'User-Agent': _rand_ua()}, timeout=10, proxies=proxy)
             alive = resp.status_code in (200, 403)
             detail = f"HTTP {resp.status_code}"
         elif gate_key == "autosho":
-            resp = requests.get('https://teamoicxkiller.online/code/index.php', headers={'User-Agent': _rand_ua()}, timeout=10)
+            resp = requests.get('https://teamoicxkiller.online/code/index.php', headers={'User-Agent': _rand_ua()}, timeout=10, proxies=proxy)
             alive = resp.status_code in (200, 400, 403)
             sites = load_shopify_sites() if 'load_shopify_sites' in dir() else []
             site_count = len(sites) if sites else 0
@@ -295,7 +341,7 @@ API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 def tg_request(method, **kwargs):
     try:
-        r = requests.post(f"{API_BASE}/{method}", json=kwargs, timeout=30)
+        r = requests.post(f"{API_BASE}/{method}", json=kwargs, timeout=30, proxies=get_proxy())
         return r.json()
     except Exception:
         return {}
@@ -339,7 +385,7 @@ def download_file(file_id):
     if not url:
         return None
     try:
-        r = requests.get(url, timeout=30)
+        r = requests.get(url, timeout=30, proxies=get_proxy())
         return r.text
     except Exception:
         return None
@@ -500,29 +546,41 @@ def format_proxy(proxy_str):
     if not proxy_str: return None
     proxy_str = proxy_str.strip()
 
-    # Already has protocol
+    # Detect protocol
+    proto = "http"
     if '://' in proxy_str:
-        return {"http": proxy_str, "https": proxy_str}
+        proto_match = re.match(r'^(https?|socks[45]h?):\/\/(.+)$', proxy_str, re.I)
+        if proto_match:
+            proto = proto_match.group(1).lower()
+            proxy_str = proto_match.group(2)
+        else:
+            # Unknown protocol, try as-is
+            return {"http": proxy_str, "https": proxy_str}
 
     # user:pass@host:port
     if '@' in proxy_str:
-        return {"http": f"http://{proxy_str}", "https": f"http://{proxy_str}"}
+        url = f"{proto}://{proxy_str}"
+        return {"http": url, "https": url}
 
     parts = proxy_str.split(':')
     if len(parts) == 2:
-        return {"http": f"http://{proxy_str}", "https": f"http://{proxy_str}"}
+        url = f"{proto}://{proxy_str}"
+        return {"http": url, "https": url}
     elif len(parts) == 3:
         # host:port:user (no password)
         host, port, user = parts
-        return {"http": f"http://{user}@{host}:{port}", "https": f"http://{user}@{host}:{port}"}
+        url = f"{proto}://{user}@{host}:{port}"
+        return {"http": url, "https": url}
     elif len(parts) == 4:
         # host:port:user:pass or user:pass:host:port
         if _is_valid_port(parts[1]):
             ip, port, user, pwd = parts
-            return {"http": f"http://{user}:{pwd}@{ip}:{port}", "https": f"http://{user}:{pwd}@{ip}:{port}"}
+            url = f"{proto}://{user}:{pwd}@{ip}:{port}"
+            return {"http": url, "https": url}
         elif _is_valid_port(parts[3]):
             user, pwd, ip, port = parts
-            return {"http": f"http://{user}:{pwd}@{ip}:{port}", "https": f"http://{user}:{pwd}@{ip}:{port}"}
+            url = f"{proto}://{user}:{pwd}@{ip}:{port}"
+            return {"http": url, "https": url}
     return None
 
 
@@ -1286,18 +1344,8 @@ DEFAULT_THREADS = 5
 
 
 def run_processing(lines, user_id, on_progress=None, on_complete=None, threads=DEFAULT_THREADS, gate="auth"):
-    # Load global proxies
-    proxies_list = []
-    if os.path.exists(PROXIES_FILE):
-        with open(PROXIES_FILE, 'r') as f:
-            proxies_list = [line.strip() for line in f if line.strip()]
-
-    # Load user's personal proxies and merge
-    user_proxy_file = os.path.join(USER_PROXIES_DIR, f"{user_id}.txt")
-    if os.path.exists(user_proxy_file):
-        with open(user_proxy_file, 'r') as f:
-            personal = [line.strip() for line in f if line.strip()]
-            proxies_list = proxies_list + personal
+    # Use global proxy pool
+    proxies_list = list(_global_proxies) if _global_proxies else []
 
     total = len(lines)
     results = {"approved": 0, "declined": 0, "errors": 0, "skipped": 0, "total": total, "approved_list": []}
@@ -1391,7 +1439,6 @@ def fmt_start(is_adm=False):
         "  /gates      — List all gates & hit rates\n"
         "  /stats      — Your lifetime stats\n"
         "  /mykey      — Check your key info\n"
-        "  /proxies    — Upload proxy file\n"
         "  /lookup     — Lookup (coming soon)\n\n"
     )
 
@@ -1835,108 +1882,8 @@ def handle_update(update):
         send_message(chat_id, fmt_mykey(user_id))
         return
 
-    # --- /proxies (admin: global proxies, user: personal proxies) ---
-    if text == "/proxies":
-        reply = msg.get("reply_to_message")
-        if not reply or not reply.get("document"):
-            send_message(chat_id,
-                "<b>Upload Proxies</b>\n\n"
-                "Reply to a <b>.txt</b> proxy file with /proxies\n\n"
-                "• Max <b>30</b> proxies per batch\n"
-                "• Each proxy is validated &amp; connectivity tested\n"
-                "• Only working proxies are added\n\n"
-                "• <b>Admins</b> — sets global proxies\n"
-                "• <b>Users</b> — adds personal proxies" + FOOTER)
-            return
-        doc = reply["document"]
-        fname = doc.get("file_name", "")
-        if not fname.lower().endswith(".txt"):
-            send_message(chat_id, "<b>Only .txt files accepted.</b>" + FOOTER)
-            return
-        if not is_authorized(user_id):
-            send_message(chat_id, fmt_unauthorized())
-            return
-        content = download_file(doc["file_id"])
-        if not content:
-            send_message(chat_id, "<b>Failed to download file.</b>" + FOOTER)
-            return
-        raw_proxies = [l.strip() for l in content.splitlines() if l.strip() and not l.strip().startswith("#")]
 
-        MAX_BATCH = 30
-        if len(raw_proxies) > MAX_BATCH:
-            send_message(chat_id,
-                f"<b>Batch Too Large</b>\n\n"
-                f"You submitted <code>{len(raw_proxies)}</code> proxies.\n"
-                f"Maximum allowed per batch: <code>{MAX_BATCH}</code>\n\n"
-                f"Please split your list and try again." + FOOTER)
-            return
-
-        # Send processing message
-        prog_msg = send_message(chat_id, f"<b>Validating {len(raw_proxies)} proxies...</b>\n\nPlease wait." + FOOTER)
-        prog_msg_id = prog_msg.get("result", {}).get("message_id")
-
-        valid_proxies = []
-        errors = []
-
-        for raw in raw_proxies:
-            # --- Format validation ---
-            parsed = validate_proxy_format(raw)
-            if parsed is None:
-                errors.append({"proxy": raw, "reason": "Invalid format"})
-                continue
-
-            # --- Connectivity test ---
-            ok, latency, reason = test_proxy_connectivity(parsed)
-            if not ok:
-                errors.append({"proxy": raw, "reason": reason})
-                continue
-
-            valid_proxies.append(raw)
-
-        submitted = len(raw_proxies)
-        accepted = len(valid_proxies)
-        rejected = len(errors)
-
-        # Build result report
-        report = (
-            f"<b>Proxy Ingestion Report</b>\n"
-            f"{'─' * 28}\n\n"
-            f"Submitted: <code>{submitted}</code>\n"
-            f"Accepted: <code>{accepted}</code>\n"
-            f"Rejected: <code>{rejected}</code>\n"
-        )
-
-        if errors:
-            report += f"\n<b>Errors:</b>\n"
-            for e in errors[:15]:
-                p = e['proxy'][:40]
-                report += f"  <code>{p}</code> — {e['reason']}\n"
-            if len(errors) > 15:
-                report += f"  ... and {len(errors) - 15} more\n"
-
-        report += FOOTER
-
-        if accepted == 0:
-            if prog_msg_id:
-                edit_message(chat_id, prog_msg_id, report)
-            else:
-                send_message(chat_id, report)
-            return
-
-        # Save valid proxies
-        if is_admin(user_id):
-            with open(PROXIES_FILE, "w") as f:
-                f.write("\n".join(valid_proxies))
-        else:
-            user_proxy_file = os.path.join(USER_PROXIES_DIR, f"{user_id}.txt")
-            with open(user_proxy_file, "w") as f:
-                f.write("\n".join(valid_proxies))
-
-        if prog_msg_id:
-            edit_message(chat_id, prog_msg_id, report)
-        else:
-            send_message(chat_id, report)
-        return
+    # --- /genkey (below) ---
 
     # --- /genkey (admin) — /genkey <limit> <duration> ---
     if text.startswith("/genkey") and not text.startswith("/genkeys"):
@@ -2050,7 +1997,8 @@ def handle_update(update):
             requests.post(
                 f"{API_BASE}/sendDocument",
                 data={"chat_id": chat_id, "caption": f"<b>{count} Keys Generated</b>\nDuration: <code>{dur_label}</code>\nLine Limit: <code>{limit_label}</code>{FOOTER}", "parse_mode": "HTML"},
-                files={"document": (filename, f)}
+                files={"document": (filename, f)},
+                proxies=get_proxy()
             )
         return
 
@@ -2330,7 +2278,8 @@ def handle_update(update):
                         requests.post(
                             f"{API_BASE}/sendDocument",
                             data={"chat_id": chat_id},
-                            files={"document": f}
+                            files={"document": f},
+                            proxies=get_proxy()
                         )
 
                 with active_lock:
@@ -2348,6 +2297,7 @@ def handle_update(update):
 # ============================================================
 def main():
     print(f"[Bot] Starting — Made by {DEVELOPER}")
+    load_global_proxies()
     print(f"[Bot] Polling for updates...")
 
     offset = 0

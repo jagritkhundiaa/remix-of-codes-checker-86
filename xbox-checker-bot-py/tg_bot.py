@@ -545,29 +545,41 @@ def format_proxy(proxy_str):
     if not proxy_str: return None
     proxy_str = proxy_str.strip()
 
-    # Already has protocol
+    # Detect protocol
+    proto = "http"
     if '://' in proxy_str:
-        return {"http": proxy_str, "https": proxy_str}
+        proto_match = re.match(r'^(https?|socks[45]h?):\/\/(.+)$', proxy_str, re.I)
+        if proto_match:
+            proto = proto_match.group(1).lower()
+            proxy_str = proto_match.group(2)
+        else:
+            # Unknown protocol, try as-is
+            return {"http": proxy_str, "https": proxy_str}
 
     # user:pass@host:port
     if '@' in proxy_str:
-        return {"http": f"http://{proxy_str}", "https": f"http://{proxy_str}"}
+        url = f"{proto}://{proxy_str}"
+        return {"http": url, "https": url}
 
     parts = proxy_str.split(':')
     if len(parts) == 2:
-        return {"http": f"http://{proxy_str}", "https": f"http://{proxy_str}"}
+        url = f"{proto}://{proxy_str}"
+        return {"http": url, "https": url}
     elif len(parts) == 3:
         # host:port:user (no password)
         host, port, user = parts
-        return {"http": f"http://{user}@{host}:{port}", "https": f"http://{user}@{host}:{port}"}
+        url = f"{proto}://{user}@{host}:{port}"
+        return {"http": url, "https": url}
     elif len(parts) == 4:
         # host:port:user:pass or user:pass:host:port
         if _is_valid_port(parts[1]):
             ip, port, user, pwd = parts
-            return {"http": f"http://{user}:{pwd}@{ip}:{port}", "https": f"http://{user}:{pwd}@{ip}:{port}"}
+            url = f"{proto}://{user}:{pwd}@{ip}:{port}"
+            return {"http": url, "https": url}
         elif _is_valid_port(parts[3]):
             user, pwd, ip, port = parts
-            return {"http": f"http://{user}:{pwd}@{ip}:{port}", "https": f"http://{user}:{pwd}@{ip}:{port}"}
+            url = f"{proto}://{user}:{pwd}@{ip}:{port}"
+            return {"http": url, "https": url}
     return None
 
 

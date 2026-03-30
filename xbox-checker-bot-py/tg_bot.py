@@ -1137,7 +1137,8 @@ def handle_callback(update):
             "<code>/binquality 424242</code>  ·  BIN quality check\n"
             "<code>/vbv 4111...</code>  ·  VBV/3DS check\n"
             "<code>/analyze https://...</code>  ·  Detect payment provider\n"
-            "<code>/autohitter URL</code>  ·  Auto-hit checkout URL\n\n"
+            "<code>/autohitter URL</code>  ·  Auto-hit checkout URL\n"
+            "<code>/filesend</code>  ·  Upload file to server\n\n"
             f"<i>{DEVELOPER}</i>"
         )
         if chat_id and msg_id:

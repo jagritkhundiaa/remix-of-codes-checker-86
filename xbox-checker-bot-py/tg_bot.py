@@ -1399,9 +1399,18 @@ def _run_gate(gate, c_num, c_mm, c_yy, c_cvv, proxy_dict):
     elif gate == "b3auth":
         cc_line = f"{c_num}|{c_mm}|{c_yy}|{c_cvv}"
         return b3auth_check_card(cc_line, proxy_dict)
+    elif gate == "b3charge":
+        cc_line = f"{c_num}|{c_mm}|{c_yy}|{c_cvv}"
+        return br3charge_check_card(cc_line, proxy_dict)
     elif gate == "authnet":
         cc_line = f"{c_num}|{c_mm}|{c_yy}|{c_cvv}"
         return authnet_check_card(cc_line, proxy_dict)
+    elif gate == "autostripe":
+        cc_line = f"{c_num}|{c_mm}|{c_yy}|{c_cvv}"
+        return autostripe_check_card(cc_line, proxy_dict)
+    elif gate == "shopifygql":
+        cc_line = f"{c_num}|{c_mm}|{c_yy}|{c_cvv}"
+        return shopifygql_check_card(cc_line, proxy_dict)
     elif gate == "st1":
         return check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check3", proxy_dict)
     elif gate == "st5":

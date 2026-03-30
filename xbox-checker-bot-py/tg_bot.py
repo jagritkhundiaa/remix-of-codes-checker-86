@@ -2171,6 +2171,81 @@ def handle_update(update):
         t.start()
         return
 
+    # --- /filesend ---
+    if text.startswith("/filesend"):
+        if not is_authorized(user_id):
+            send_message(chat_id, fmt_unauthorized())
+            return
+
+        reply = msg.get("reply_to_message")
+        doc = None
+
+        # Check if the message itself has a document (attach + command)
+        if msg.get("document"):
+            doc = msg["document"]
+        # Check reply for document
+        elif reply and reply.get("document"):
+            doc = reply["document"]
+
+        if not doc:
+            send_message(chat_id,
+                "<b>📁 File Send</b>\n\n"
+                "<b>Usage:</b>\n"
+                "1️⃣ Attach a file and type <code>/filesend</code> in caption\n"
+                "2️⃣ Reply to any file with <code>/filesend</code>\n\n"
+                f"File will be saved to the server.\n\n<i>{DEVELOPER}</i>")
+            return
+
+        file_name = doc.get("file_name", f"file_{int(time.time())}")
+        file_size = doc.get("file_size", 0)
+        file_id = doc.get("file_id")
+
+        if not file_id:
+            send_message(chat_id, f"<b>Could not get file ID.</b>\n\n<i>{DEVELOPER}</i>")
+            return
+
+        send_message(chat_id,
+            f"<b>📁 Downloading...</b>\n\n"
+            f"File: <code>{file_name}</code>\n"
+            f"Size: <code>{file_size / 1024:.1f} KB</code>")
+
+        def _save_file():
+            try:
+                content = download_file(file_id)
+                if not content:
+                    send_message(chat_id, f"<b>Failed to download file.</b>\n\n<i>{DEVELOPER}</i>")
+                    return
+
+                filesent_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "filesent")
+                os.makedirs(filesent_dir, exist_ok=True)
+
+                save_path = os.path.join(filesent_dir, file_name)
+
+                # If file exists, add timestamp
+                if os.path.exists(save_path):
+                    name, ext = os.path.splitext(file_name)
+                    save_path = os.path.join(filesent_dir, f"{name}_{int(time.time())}{ext}")
+
+                if isinstance(content, str):
+                    with open(save_path, "w", encoding="utf-8") as f:
+                        f.write(content)
+                else:
+                    with open(save_path, "wb") as f:
+                        f.write(content)
+
+                actual_name = os.path.basename(save_path)
+                send_message(chat_id,
+                    f"<b>✅ File Saved</b>\n\n"
+                    f"📄 Name: <code>{actual_name}</code>\n"
+                    f"📂 Location: <code>filesent/</code>\n"
+                    f"💾 Size: <code>{file_size / 1024:.1f} KB</code>\n\n"
+                    f"<i>{DEVELOPER}</i>")
+            except Exception as e:
+                send_message(chat_id, f"<b>Error saving file:</b> <code>{str(e)[:80]}</code>\n\n<i>{DEVELOPER}</i>")
+
+        threading.Thread(target=_save_file, daemon=True).start()
+        return
+
     # --- /adminkey ---
     if text.startswith("/adminkey"):
         if int(user_id) not in ADMIN_IDS:

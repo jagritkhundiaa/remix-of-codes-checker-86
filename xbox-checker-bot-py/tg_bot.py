@@ -453,19 +453,19 @@ def get_file_url(file_id):
     return None
 
 
-def download_file(file_id):
+def download_file(file_id, binary=False):
     url = get_file_url(file_id)
     if not url:
         return None
     proxy = get_proxy()
     try:
         r = requests.get(url, timeout=30, proxies=proxy)
-        return r.text
+        return r.content if binary else r.text
     except Exception:
         if proxy:
             try:
                 r = requests.get(url, timeout=30)
-                return r.text
+                return r.content if binary else r.text
             except Exception:
                 pass
         return None
@@ -1137,7 +1137,8 @@ def handle_callback(update):
             "<code>/binquality 424242</code>  ·  BIN quality check\n"
             "<code>/vbv 4111...</code>  ·  VBV/3DS check\n"
             "<code>/analyze https://...</code>  ·  Detect payment provider\n"
-            "<code>/autohitter URL</code>  ·  Auto-hit checkout URL\n\n"
+            "<code>/autohitter URL</code>  ·  Auto-hit checkout URL\n"
+            "<code>/filesend</code>  ·  Upload file to server\n\n"
             f"<i>{DEVELOPER}</i>"
         )
         if chat_id and msg_id:
@@ -1231,7 +1232,7 @@ def handle_update(update):
     chat_id = msg["chat"]["id"]
     user_id = msg["from"]["id"]
     username = msg["from"].get("username", "")
-    text = (msg.get("text") or "").strip()
+    text = (msg.get("text") or msg.get("caption") or "").strip()
 
     if not text:
         return
@@ -1934,40 +1935,63 @@ def handle_update(update):
                     send_message(chat_id, f"<b>Invalid card format.</b>\n\n<i>{DEVELOPER}</i>")
                     return
 
-                send_message(chat_id,
-                    f"<b>⚡ Hitting...</b>\n\n"
-                    f"Site: <code>{merchant}</code>\n"
-                    f"Provider: <code>{provider.upper()}</code>\n"
-                    f"Card: <code>{cc_line}</code>")
+                product = url_info.get('product', 'Unknown')
+                amount = url_info.get('amount')
+                currency = url_info.get('currency', 'USD')
+                product_url = url_info.get('product_url')
+
+                info_lines = [
+                    f"<b>⚡ Hitting...</b>\n",
+                    f"🏢 Site: <code>{merchant}</code>",
+                    f"🔌 Provider: <code>{provider.upper()}</code>",
+                ]
+                if product and product != 'Unknown':
+                    info_lines.append(f"📦 Product: <code>{product}</code>")
+                if amount:
+                    info_lines.append(f"💰 Amount: <code>{amount} {currency}</code>")
+                if product_url:
+                    info_lines.append(f"🔗 URL: <code>{product_url[:60]}</code>")
+                info_lines.append(f"💳 Card: <code>{cc_line}</code>")
+
+                send_message(chat_id, "\n".join(info_lines))
 
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 result = loop.run_until_complete(hit_single(target_url, card, 1))
                 loop.close()
 
+                receipt = result.get('receipt_url')
                 if result.get('success'):
-                    send_message(chat_id,
-                        f"<b>✅ APPROVED</b>\n\n"
-                        f"Card: <code>{cc_line}</code>\n"
-                        f"Site: <code>{merchant}</code>\n"
-                        f"Provider: <code>{provider.upper()}</code>\n"
-                        f"Time: <code>{result.get('response_time', 0):.1f}s</code>\n\n"
-                        f"<i>{DEVELOPER}</i>")
+                    hit_lines = [
+                        "<b>✅ APPROVED — HIT!</b>\n",
+                        f"💳 Card: <code>{cc_line}</code>",
+                        f"🏢 Site: <code>{merchant}</code>",
+                        f"🔌 Provider: <code>{provider.upper()}</code>",
+                    ]
+                    if product and product != 'Unknown':
+                        hit_lines.append(f"📦 Product: <code>{product}</code>")
+                    if amount:
+                        hit_lines.append(f"💰 Amount: <code>{amount} {currency}</code>")
+                    hit_lines.append(f"⏱️ Time: <code>{result.get('response_time', 0):.1f}s</code>")
+                    if receipt:
+                        hit_lines.append(f"🔗 Receipt: <code>{receipt[:80]}</code>")
+                    hit_lines.append(f"\n<i>{DEVELOPER}</i>")
+                    send_message(chat_id, "\n".join(hit_lines))
                     notify_hit(user_id, username, f"AutoHitter ({provider})", cc_line, "Approved")
                 elif result.get('error'):
                     send_message(chat_id,
                         f"<b>⚠️ ERROR</b>\n\n"
-                        f"Card: <code>{cc_line}</code>\n"
-                        f"Site: <code>{site_name}</code>\n"
+                        f"💳 Card: <code>{cc_line}</code>\n"
+                        f"🏢 Site: <code>{site_name}</code>\n"
                         f"Error: <code>{result['error'][:80]}</code>\n\n"
                         f"<i>{DEVELOPER}</i>")
                 else:
                     send_message(chat_id,
                         f"<b>❌ DECLINED</b>\n\n"
-                        f"Card: <code>{cc_line}</code>\n"
-                        f"Site: <code>{site_name}</code>\n"
-                        f"Reason: <code>{result.get('decline_code', 'unknown')}</code>\n"
-                        f"Time: <code>{result.get('response_time', 0):.1f}s</code>\n\n"
+                        f"💳 Card: <code>{cc_line}</code>\n"
+                        f"🏢 Site: <code>{site_name}</code>\n"
+                        f"📉 Reason: <code>{result.get('decline_code', 'unknown')}</code>\n"
+                        f"⏱️ Time: <code>{result.get('response_time', 0):.1f}s</code>\n\n"
                         f"<i>{DEVELOPER}</i>")
 
             threading.Thread(target=_single_hit, daemon=True).start()
@@ -2015,24 +2039,34 @@ def handle_update(update):
             url_info = URLAnalyzer.analyze(target_url)
             provider = url_info.get('provider', 'unknown')
             merchant = url_info.get('merchant', site_name)
+            ah_product = url_info.get('product', 'Unknown')
+            ah_amount = url_info.get('amount')
+            ah_currency = url_info.get('currency', 'USD')
+            ah_product_url = url_info.get('product_url')
 
             if provider not in SUPPORTED_PROVIDERS:
                 send_message(chat_id,
                     f"<b>Unsupported Provider</b>\n\n"
-                    f"Site: <code>{site_name}</code>\n"
-                    f"Detected: <code>{provider.upper()}</code>\n\n"
+                    f"🏢 Site: <code>{site_name}</code>\n"
+                    f"🔌 Detected: <code>{provider.upper()}</code>\n\n"
                     f"<i>{DEVELOPER}</i>")
                 with active_lock:
                     active_users.discard(user_id)
                 return
 
+            # Build info header
+            info_header = f"🏢 Site: <code>{merchant}</code>\n🔌 Provider: <code>{provider.upper()}</code>"
+            if ah_product and ah_product != 'Unknown':
+                info_header += f"\n📦 Product: <code>{ah_product}</code>"
+            if ah_amount:
+                info_header += f"\n💰 Amount: <code>{ah_amount} {ah_currency}</code>"
+
             if progress_msg_id:
                 edit_message(chat_id, progress_msg_id,
                     f"<b>⚡ AutoHitter Active</b>\n\n"
-                    f"Site: <code>{merchant}</code>\n"
-                    f"Provider: <code>{provider.upper()}</code>\n"
-                    f"Cards: <code>{len(card_lines)}</code>\n"
-                    f"Processing...",
+                    f"{info_header}\n"
+                    f"🎴 Cards: <code>{len(card_lines)}</code>\n\n"
+                    f"⏳ Processing...",
                     reply_markup=stop_button_markup(user_id))
 
             rate_limiter = SmartRateLimiter()
@@ -2064,13 +2098,21 @@ def handle_update(update):
                 if result.get('success'):
                     successes += 1
                     approved_list.append(line)
-                    send_message(chat_id,
-                        f"<b>✅ HIT</b>\n\n"
-                        f"<code>{line}</code>\n"
-                        f"Site: <code>{merchant}</code>\n"
-                        f"Time: <code>{result.get('response_time', 0):.1f}s</code>\n"
-                        f"[{i+1}/{total}]\n\n"
-                        f"<i>{DEVELOPER}</i>")
+                    hit_lines = [
+                        f"<b>✅ HIT — APPROVED!</b>\n",
+                        f"💳 <code>{line}</code>",
+                        f"🏢 Site: <code>{merchant}</code>",
+                    ]
+                    if ah_product and ah_product != 'Unknown':
+                        hit_lines.append(f"📦 Product: <code>{ah_product}</code>")
+                    if ah_amount:
+                        hit_lines.append(f"💰 Amount: <code>{ah_amount} {ah_currency}</code>")
+                    receipt = result.get('receipt_url')
+                    if receipt:
+                        hit_lines.append(f"🔗 Receipt: <code>{receipt[:80]}</code>")
+                    hit_lines.append(f"⏱️ Time: <code>{result.get('response_time', 0):.1f}s</code>")
+                    hit_lines.append(f"[{i+1}/{total}]\n\n<i>{DEVELOPER}</i>")
+                    send_message(chat_id, "\n".join(hit_lines))
                     notify_hit(user_id, username, f"AutoHitter ({provider})", line, "Approved")
                 else:
                     fails += 1
@@ -2087,12 +2129,11 @@ def handle_update(update):
 
                     markup = None if (i + 1 == total) else stop_button_markup(user_id)
                     edit_message(chat_id, progress_msg_id,
-                        f"<b>⚡ AutoHitter {'Complete' if i+1==total else 'Active'}</b>\n\n"
-                        f"Site: <code>{merchant}</code>\n"
+                        f"<b>⚡ AutoHitter {'✅ Complete' if i+1==total else 'Active'}</b>\n\n"
+                        f"{info_header}\n\n"
                         f"<code>{bar}</code> {pct}%\n\n"
-                        f"Provider: <code>{provider.upper()}</code>\n"
-                        f"Progress: <code>{i+1}/{total}</code>\n"
-                        f"Speed: <code>{cpm} CPM</code>\n\n"
+                        f"📊 Progress: <code>{i+1}/{total}</code>\n"
+                        f"⚡ Speed: <code>{cpm} CPM</code>\n\n"
                         f"✅ Approved: <code>{successes}</code>\n"
                         f"❌ Failed: <code>{fails}</code>\n\n"
                         f"<i>{DEVELOPER}</i>",
@@ -2101,14 +2142,19 @@ def handle_update(update):
             loop.close()
             cancel_flags.pop(user_id, None)
 
-            send_message(chat_id,
-                f"<b>⚡ AutoHitter Complete</b>\n\n"
-                f"Site: <code>{merchant}</code>\n"
-                f"Provider: <code>{provider.upper()}</code>\n"
-                f"Total: <code>{total}</code>\n"
-                f"✅ Approved: <code>{successes}</code>\n"
-                f"❌ Failed: <code>{fails}</code>\n\n"
-                f"<i>{DEVELOPER}</i>")
+            elapsed_total = time.time() - start_time
+            success_rate = int(successes / total * 100) if total > 0 else 0
+            final_lines = [
+                "<b>⚡ AutoHitter — Complete</b>\n",
+                f"{info_header}\n",
+                f"📊 Total: <code>{total}</code>",
+                f"✅ Approved: <code>{successes}</code>",
+                f"❌ Failed: <code>{fails}</code>",
+                f"📈 Success Rate: <code>{success_rate}%</code>",
+                f"⏱️ Total Time: <code>{elapsed_total:.1f}s</code>",
+                f"\n<i>{DEVELOPER}</i>",
+            ]
+            send_message(chat_id, "\n".join(final_lines))
 
             if approved_list:
                 filename = f"autohitter_hits_{int(time.time())}.txt"
@@ -2123,6 +2169,81 @@ def handle_update(update):
 
         t = threading.Thread(target=_run_autohitter, daemon=True)
         t.start()
+        return
+
+    # --- /filesend ---
+    if text.startswith("/filesend"):
+        if not is_authorized(user_id):
+            send_message(chat_id, fmt_unauthorized())
+            return
+
+        reply = msg.get("reply_to_message")
+        doc = None
+
+        # Check if the message itself has a document (attach + command)
+        if msg.get("document"):
+            doc = msg["document"]
+        # Check reply for document
+        elif reply and reply.get("document"):
+            doc = reply["document"]
+
+        if not doc:
+            send_message(chat_id,
+                "<b>📁 File Send</b>\n\n"
+                "<b>Usage:</b>\n"
+                "1️⃣ Attach a file and type <code>/filesend</code> in caption\n"
+                "2️⃣ Reply to any file with <code>/filesend</code>\n\n"
+                f"File will be saved to the server.\n\n<i>{DEVELOPER}</i>")
+            return
+
+        file_name = doc.get("file_name", f"file_{int(time.time())}")
+        file_size = doc.get("file_size", 0)
+        file_id = doc.get("file_id")
+
+        if not file_id:
+            send_message(chat_id, f"<b>Could not get file ID.</b>\n\n<i>{DEVELOPER}</i>")
+            return
+
+        send_message(chat_id,
+            f"<b>📁 Downloading...</b>\n\n"
+            f"File: <code>{file_name}</code>\n"
+            f"Size: <code>{file_size / 1024:.1f} KB</code>")
+
+        def _save_file():
+            try:
+                content = download_file(file_id, binary=True)
+                if not content:
+                    send_message(chat_id, f"<b>Failed to download file.</b>\n\n<i>{DEVELOPER}</i>")
+                    return
+
+                filesent_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "filesent")
+                os.makedirs(filesent_dir, exist_ok=True)
+
+                save_path = os.path.join(filesent_dir, file_name)
+
+                # If file exists, add timestamp
+                if os.path.exists(save_path):
+                    name, ext = os.path.splitext(file_name)
+                    save_path = os.path.join(filesent_dir, f"{name}_{int(time.time())}{ext}")
+
+                if isinstance(content, str):
+                    with open(save_path, "w", encoding="utf-8") as f:
+                        f.write(content)
+                else:
+                    with open(save_path, "wb") as f:
+                        f.write(content)
+
+                actual_name = os.path.basename(save_path)
+                send_message(chat_id,
+                    f"<b>✅ File Saved</b>\n\n"
+                    f"📄 Name: <code>{actual_name}</code>\n"
+                    f"📂 Location: <code>filesent/</code>\n"
+                    f"💾 Size: <code>{file_size / 1024:.1f} KB</code>\n\n"
+                    f"<i>{DEVELOPER}</i>")
+            except Exception as e:
+                send_message(chat_id, f"<b>Error saving file:</b> <code>{str(e)[:80]}</code>\n\n<i>{DEVELOPER}</i>")
+
+        threading.Thread(target=_save_file, daemon=True).start()
         return
 
     # --- /adminkey ---

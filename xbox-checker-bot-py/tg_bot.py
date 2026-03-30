@@ -1935,11 +1935,25 @@ def handle_update(update):
                     send_message(chat_id, f"<b>Invalid card format.</b>\n\n<i>{DEVELOPER}</i>")
                     return
 
-                send_message(chat_id,
-                    f"<b>⚡ Hitting...</b>\n\n"
-                    f"Site: <code>{merchant}</code>\n"
-                    f"Provider: <code>{provider.upper()}</code>\n"
-                    f"Card: <code>{cc_line}</code>")
+                product = url_info.get('product', 'Unknown')
+                amount = url_info.get('amount')
+                currency = url_info.get('currency', 'USD')
+                product_url = url_info.get('product_url')
+
+                info_lines = [
+                    f"<b>⚡ Hitting...</b>\n",
+                    f"🏢 Site: <code>{merchant}</code>",
+                    f"🔌 Provider: <code>{provider.upper()}</code>",
+                ]
+                if product and product != 'Unknown':
+                    info_lines.append(f"📦 Product: <code>{product}</code>")
+                if amount:
+                    info_lines.append(f"💰 Amount: <code>{amount} {currency}</code>")
+                if product_url:
+                    info_lines.append(f"🔗 URL: <code>{product_url[:60]}</code>")
+                info_lines.append(f"💳 Card: <code>{cc_line}</code>")
+
+                send_message(chat_id, "\n".join(info_lines))
 
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)

@@ -1692,11 +1692,11 @@ def handle_update(update):
                 masked = raw[:25] + "..." if len(raw) > 25 else raw
                 if alive:
                     valid.append(raw)
-                    results_lines.append(f"<code>{masked}</code> — <code>{latency}ms</code>")
+                    results_lines.append(f"✅ <code>{masked}</code> — <code>{latency}ms</code>")
                 else:
-                    # Still add it but mark as slow/dead
-                    valid.append(raw)
-                    results_lines.append(f"<code>{masked}</code> — <code>WARN: {error}</code> (added anyway)")
+                    # Do NOT add dead proxies
+                    invalid.append(raw)
+                    results_lines.append(f"❌ <code>{masked}</code> — <code>{error}</code>")
 
             # Append valid proxies to file and pool
             if valid:

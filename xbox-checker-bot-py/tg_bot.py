@@ -1098,6 +1098,7 @@ def handle_callback(update):
             "<b>Tools</b>\n\n"
             "<code>/gen 424242 10</code>  ·  Generate cards from BIN\n"
             "<code>/binlookup 424242</code>  ·  BIN info lookup\n"
+            "<code>/binquality 424242</code>  ·  BIN quality check\n"
             "<code>/vbv 4111...</code>  ·  VBV/3DS check\n"
             "<code>/analyze https://...</code>  ·  Detect payment provider\n"
             "<code>/autohitter URL</code>  ·  Auto-hit checkout URL\n\n"

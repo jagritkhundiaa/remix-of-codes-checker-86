@@ -2129,12 +2129,11 @@ def handle_update(update):
 
                     markup = None if (i + 1 == total) else stop_button_markup(user_id)
                     edit_message(chat_id, progress_msg_id,
-                        f"<b>⚡ AutoHitter {'Complete' if i+1==total else 'Active'}</b>\n\n"
-                        f"Site: <code>{merchant}</code>\n"
+                        f"<b>⚡ AutoHitter {'✅ Complete' if i+1==total else 'Active'}</b>\n\n"
+                        f"{info_header}\n\n"
                         f"<code>{bar}</code> {pct}%\n\n"
-                        f"Provider: <code>{provider.upper()}</code>\n"
-                        f"Progress: <code>{i+1}/{total}</code>\n"
-                        f"Speed: <code>{cpm} CPM</code>\n\n"
+                        f"📊 Progress: <code>{i+1}/{total}</code>\n"
+                        f"⚡ Speed: <code>{cpm} CPM</code>\n\n"
                         f"✅ Approved: <code>{successes}</code>\n"
                         f"❌ Failed: <code>{fails}</code>\n\n"
                         f"<i>{DEVELOPER}</i>",
@@ -2143,14 +2142,19 @@ def handle_update(update):
             loop.close()
             cancel_flags.pop(user_id, None)
 
-            send_message(chat_id,
-                f"<b>⚡ AutoHitter Complete</b>\n\n"
-                f"Site: <code>{merchant}</code>\n"
-                f"Provider: <code>{provider.upper()}</code>\n"
-                f"Total: <code>{total}</code>\n"
-                f"✅ Approved: <code>{successes}</code>\n"
-                f"❌ Failed: <code>{fails}</code>\n\n"
-                f"<i>{DEVELOPER}</i>")
+            elapsed_total = time.time() - start_time
+            success_rate = int(successes / total * 100) if total > 0 else 0
+            final_lines = [
+                "<b>⚡ AutoHitter — Complete</b>\n",
+                f"{info_header}\n",
+                f"📊 Total: <code>{total}</code>",
+                f"✅ Approved: <code>{successes}</code>",
+                f"❌ Failed: <code>{fails}</code>",
+                f"📈 Success Rate: <code>{success_rate}%</code>",
+                f"⏱️ Total Time: <code>{elapsed_total:.1f}s</code>",
+                f"\n<i>{DEVELOPER}</i>",
+            ]
+            send_message(chat_id, "\n".join(final_lines))
 
             if approved_list:
                 filename = f"autohitter_hits_{int(time.time())}.txt"

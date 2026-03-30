@@ -17,6 +17,10 @@ from datetime import datetime
 from braintree_checker import check_card as b3_check_card
 from braintree_auth_checker import check_card as b3auth_check_card, probe_site as b3auth_probe_site
 from authnet_checker import check_card as authnet_check_card, probe_site as authnet_probe_site
+from br3_charge_checker import check_card as br3charge_check_card, probe_site as br3charge_probe_site
+from auto_stripe_checker import check_card as autostripe_check_card, probe_site as autostripe_probe_site
+from shopify_gql_checker import check_card as shopifygql_check_card
+from dlx_tools import bin_lookup, format_bin_result, generate_cards, vbv_lookup, analyze_url, detect_provider, scrape_proxies, check_proxy
 
 try:
     from faker import Faker
@@ -197,7 +201,10 @@ GATE_PROBE_MAP = {
     "auth": {"name": "Stripe Auth (Dilaboards)", "cmd": "/chkapiauth"},
     "b3": {"name": "Braintree Auth", "cmd": "/chkapib3"},
     "b3auth": {"name": "Braintree Auth (Session)", "cmd": "/chkapib3auth"},
+    "b3charge": {"name": "Braintree $1 Charge", "cmd": "/chkapib3charge"},
     "authnet": {"name": "Authorize.net", "cmd": "/chkapiauthnet"},
+    "autostripe": {"name": "Auto Stripe (WooCommerce)", "cmd": "/chkapiautostripe"},
+    "shopifygql": {"name": "Shopify GQL Direct", "cmd": "/chkapishopifygql"},
     "st1": {"name": "HiAPI Check3", "cmd": "/chkapist1"},
     "st5": {"name": "HiAPI Check", "cmd": "/chkapist5"},
     "autosho": {"name": "Shopify Auto", "cmd": "/chkapiautosho"},
@@ -229,8 +236,20 @@ def probe_gate(gate_key):
             detail = f"HTTP {resp.status_code}" + (" | Braintree key found" if alive else " | No Braintree key")
         elif gate_key == "b3auth":
             alive, detail = b3auth_probe_site()
+        elif gate_key == "b3charge":
+            alive, detail = br3charge_probe_site()
         elif gate_key == "authnet":
             alive, detail = authnet_probe_site()
+        elif gate_key == "autostripe":
+            alive, detail = autostripe_probe_site()
+        elif gate_key == "shopifygql":
+            sites = load_shopify_sites()
+            if sites:
+                alive = True
+                detail = f"{len(sites)} sites loaded"
+            else:
+                alive = False
+                detail = "No sites in sites.txt"
         elif gate_key == "autosho":
             resp = requests.get('https://teamoicxkiller.online/code/index.php', headers={'User-Agent': _rand_ua()}, timeout=10, proxies=proxy)
             alive = resp.status_code in (200, 400, 403)
@@ -1380,9 +1399,18 @@ def _run_gate(gate, c_num, c_mm, c_yy, c_cvv, proxy_dict):
     elif gate == "b3auth":
         cc_line = f"{c_num}|{c_mm}|{c_yy}|{c_cvv}"
         return b3auth_check_card(cc_line, proxy_dict)
+    elif gate == "b3charge":
+        cc_line = f"{c_num}|{c_mm}|{c_yy}|{c_cvv}"
+        return br3charge_check_card(cc_line, proxy_dict)
     elif gate == "authnet":
         cc_line = f"{c_num}|{c_mm}|{c_yy}|{c_cvv}"
         return authnet_check_card(cc_line, proxy_dict)
+    elif gate == "autostripe":
+        cc_line = f"{c_num}|{c_mm}|{c_yy}|{c_cvv}"
+        return autostripe_check_card(cc_line, proxy_dict)
+    elif gate == "shopifygql":
+        cc_line = f"{c_num}|{c_mm}|{c_yy}|{c_cvv}"
+        return shopifygql_check_card(cc_line, proxy_dict)
     elif gate == "st1":
         return check_cc_hiapi(c_num, c_mm, c_yy, c_cvv, "check3", proxy_dict)
     elif gate == "st5":
@@ -1523,47 +1551,59 @@ FOOTER = f"\n{'─' * 28}\n  Made by {DEVELOPER}"
 
 def fmt_start(is_adm=False):
     base = (
-        "<b>Data Processing Bot</b>\n"
+        "<b>⚡ DLX Data Processing Bot</b>\n"
         f"{'─' * 28}\n\n"
         "Upload a <b>.txt</b> file, then reply to it with a gate command\n\n"
-        "<b>Gates:</b>\n"
-        "  /auth       — Stripe Auth (Dilaboards)\n"
-        "  /b3         — Braintree Auth\n"
-        "  /b3auth     — Braintree Auth (Session)\n"
-        "  /authnet    — Authorize.net\n"
-        "  /autosho    — Shopify Auto (sites.txt) 🔜 Coming Soon\n"
-        "  /st1        — HiAPI Check3\n"
-        "  /st5        — HiAPI Check\n\n"
-        "<b>Commands:</b>\n"
-        "  /bin        — Set BIN filter\n"
-        "  /clearbin   — Clear BIN filter\n"
-        "  /cancel     — Stop active task\n"
-        "  /gates      — List all gates & hit rates\n"
-        "  /stats      — Your lifetime stats\n"
-        "  /mykey      — Check your key info\n"
-        "  /lookup     — Lookup (coming soon)\n\n"
+        "<b>🔒 Auth Gates:</b>\n"
+        "  /auth         — Stripe Auth (Dilaboards)\n"
+        "  /b3           — Braintree Auth\n"
+        "  /b3auth       — Braintree Auth (Session)\n"
+        "  /autostripe   — Auto Stripe (WooCommerce)\n\n"
+        "<b>💰 Charge Gates:</b>\n"
+        "  /b3charge     — Braintree $1 Charge\n"
+        "  /authnet      — Authorize.net\n"
+        "  /shopifygql   — Shopify GQL Direct\n"
+        "  /autosho      — Shopify Auto (sites.txt)\n\n"
+        "<b>🌐 External APIs:</b>\n"
+        "  /st1          — HiAPI Check3\n"
+        "  /st5          — HiAPI Check\n\n"
+        "<b>🔧 Tools:</b>\n"
+        "  /gen          — Generate cards from BIN\n"
+        "  /binlookup    — BIN info lookup\n"
+        "  /vbv          — VBV/3DS check\n"
+        "  /analyze      — Detect payment provider\n\n"
+        "<b>⚙️ Commands:</b>\n"
+        "  /bin          — Set BIN filter\n"
+        "  /clearbin     — Clear BIN filter\n"
+        "  /cancel       — Stop active task\n"
+        "  /gates        — List all gates & hit rates\n"
+        "  /stats        — Your lifetime stats\n"
+        "  /mykey        — Check your key info\n\n"
     )
 
     if is_adm:
         base += (
-            "<b>Admin:</b>\n"
-            "  /genkey     — Generate single key\n"
-            "  /genkeys    — Bulk generate keys\n"
-            "  /adminkey   — Promote user to admin\n"
-            "  /adminlist  — List all admins\n"
-            "  /authlist   — List authorized users\n"
-            "  /revoke     — Revoke user access\n"
-            "  /broadcast  — Message all users\n"
-            "  /chkapis    — Health check all APIs\n\n"
+            "<b>👑 Admin:</b>\n"
+            "  /genkey        — Generate single key\n"
+            "  /genkeys       — Bulk generate keys\n"
+            "  /adminkey      — Promote user to admin\n"
+            "  /adminlist     — List all admins\n"
+            "  /authlist      — List authorized users\n"
+            "  /revoke        — Revoke user access\n"
+            "  /broadcast     — Message all users\n"
+            "  /scrapeproxies — Scrape fresh proxies\n"
+            "  /chkapis       — Health check all APIs\n\n"
         )
 
     base += (
         "<b>How to use:</b>\n"
         "  <b>Single:</b> <code>/auth 4111...|01|25|123</code>\n"
         "  <b>Bulk:</b> Send .txt → reply with /auth\n"
-        "  <b>Braintree:</b> <code>/b3 4111...|01|25|123</code>\n"
-        "  <b>Authorize:</b> <code>/authnet 4111...|01|2025|123</code>\n"
-        "  <b>Shopify:</b> <code>/autosho 4111...|01|25|123</code>\n"
+        "  <b>BR3 Charge:</b> <code>/b3charge 4111...|01|25|123</code>\n"
+        "  <b>Auto Stripe:</b> <code>/autostripe 4111...|01|25|123</code>\n"
+        "  <b>Shopify GQL:</b> <code>/shopifygql 4111...|01|25|123</code>\n"
+        "  <b>Gen Cards:</b> <code>/gen 424242 10</code>\n"
+        "  <b>BIN Lookup:</b> <code>/binlookup 424242</code>\n"
         f"{FOOTER}"
     )
     return base
@@ -1793,12 +1833,131 @@ def handle_update(update):
         send_message(chat_id, fmt_start(is_adm=is_admin(user_id)))
         return
 
-    # --- /lookup ---
-    if text == "/lookup":
-        send_message(chat_id, f"<b>Lookup</b>\n\nComing soon.{FOOTER}")
+    # --- /gen <BIN> [count] — Card generator ---
+    if text.startswith("/gen"):
+        cmd_word = text.split()[0]
+        if cmd_word == "/gen":
+            if not is_authorized(user_id):
+                send_message(chat_id, fmt_unauthorized())
+                return
+            parts = text.split()
+            if len(parts) < 2:
+                send_message(chat_id, "<b>Usage:</b> <code>/gen 424242 10</code>\n\nFormats: <code>424242</code> or <code>424242|MM|YY|CVV</code>\nUse <code>x</code> for random digits" + FOOTER)
+                return
+            bin_input = parts[1]
+            count = 10
+            if len(parts) >= 3:
+                try:
+                    count = min(int(parts[2]), 50)
+                except ValueError:
+                    count = 10
+            cards = generate_cards(bin_input, count)
+            if not cards:
+                send_message(chat_id, "<b>Invalid BIN.</b>" + FOOTER)
+                return
+            card_text = "\n".join(f"<code>{c}</code>" for c in cards)
+            send_message(chat_id,
+                f"<b>🎴 Generated {len(cards)} Cards</b>\n"
+                f"{'─' * 28}\n\n"
+                f"BIN: <code>{bin_input}</code>\n\n"
+                f"{card_text}" + FOOTER)
+            return
+
+    # --- /binlookup <BIN> — BIN info lookup ---
+    if text.startswith("/binlookup"):
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            send_message(chat_id, "<b>Usage:</b> <code>/binlookup 424242</code>" + FOOTER)
+            return
+        bin_num = parts[1].strip().split('|')[0][:6]
+        info, err = bin_lookup(bin_num)
+        if info:
+            send_message(chat_id,
+                f"<b>🔍 BIN Lookup — {bin_num}</b>\n"
+                f"{'─' * 28}\n\n"
+                f"Brand: <code>{info['brand']}</code>\n"
+                f"Type: <code>{info['type']}</code>\n"
+                f"Bank: <code>{info['bank']}</code>\n"
+                f"Country: <code>{info['country']}</code> {info['emoji']}" + FOOTER)
+        else:
+            send_message(chat_id, f"<b>BIN Lookup Failed</b>\n\n{err}" + FOOTER)
         return
 
-    # (dead gates removed — no coming soon handler needed)
+    # --- /vbv <CC|MM|YY|CVV> — VBV/3DS check ---
+    if text.startswith("/vbv"):
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            send_message(chat_id, "<b>Usage:</b> <code>/vbv 4111111111111111</code>" + FOOTER)
+            return
+        result = vbv_lookup(parts[1].strip())
+        send_message(chat_id, f"<b>🔒 VBV/3DS Check</b>\n{'─' * 28}\n\n{result}" + FOOTER)
+        return
+
+    # --- /analyze <URL> — URL payment provider detection ---
+    if text.startswith("/analyze"):
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            send_message(chat_id, "<b>Usage:</b> <code>/analyze https://example.com</code>" + FOOTER)
+            return
+        if not is_authorized(user_id):
+            send_message(chat_id, fmt_unauthorized())
+            return
+        url = parts[1].strip()
+        send_message(chat_id, f"<b>🔍 Analyzing...</b>\n<code>{url[:60]}</code>")
+
+        def _do_analyze():
+            info = analyze_url(url)
+            provider = info.get('provider', 'unknown')
+            merchant = info.get('merchant', 'Unknown')
+            product = info.get('product', '-')
+            amount = info.get('amount', '-')
+            currency = info.get('currency', 'USD')
+            stripe_key = info.get('stripe_key', '-')
+            error = info.get('error')
+
+            lines = [
+                f"<b>🌐 URL Analysis</b>",
+                f"{'─' * 28}\n",
+                f"URL: <code>{url[:80]}</code>",
+                f"Provider: <code>{provider.upper()}</code>",
+                f"Merchant: <code>{merchant}</code>",
+            ]
+            if product and product != '-':
+                lines.append(f"Product: <code>{product}</code>")
+            if amount:
+                lines.append(f"Amount: <code>{amount} {currency}</code>")
+            if stripe_key and stripe_key != '-':
+                lines.append(f"Stripe Key: <code>{stripe_key[:20]}...</code>")
+            if error:
+                lines.append(f"⚠️ Error: {error}")
+            lines.append(FOOTER)
+            send_message(chat_id, "\n".join(lines))
+
+        threading.Thread(target=_do_analyze, daemon=True).start()
+        return
+
+    # --- /scrapeproxies (admin only) — Scrape fresh proxies ---
+    if text == "/scrapeproxies":
+        if not is_admin(user_id):
+            return
+        send_message(chat_id, "<b>🔄 Scraping proxies...</b>")
+
+        def _do_scrape():
+            proxies = scrape_proxies()
+            if proxies:
+                # Save to proxies.txt
+                with open(PROXIES_FILE, 'w') as f:
+                    f.write('\n'.join(proxies))
+                load_global_proxies()
+                send_message(chat_id,
+                    f"<b>✅ Scraped {len(proxies)} Proxies</b>\n\n"
+                    f"Saved to proxies.txt and loaded into pool.\n"
+                    f"Active proxies: <code>{get_proxy_count()}</code>" + FOOTER)
+            else:
+                send_message(chat_id, "<b>❌ Failed to scrape proxies.</b>" + FOOTER)
+
+        threading.Thread(target=_do_scrape, daemon=True).start()
+        return
 
     # --- /adminkey <user_id> <duration> (owner only) ---
     if text.startswith("/adminkey"):
@@ -1867,7 +2026,10 @@ def handle_update(update):
         "/chkapiauth": "auth",
         "/chkapib3": "b3",
         "/chkapib3auth": "b3auth",
+        "/chkapib3charge": "b3charge",
         "/chkapiauthnet": "authnet",
+        "/chkapiautostripe": "autostripe",
+        "/chkapishopifygql": "shopifygql",
         "/chkapiautosho": "autosho",
         "/chkapist1": "st1",
         "/chkapist5": "st5",
@@ -1952,8 +2114,11 @@ def handle_update(update):
             ("auth", "/auth", "Stripe Auth (Dilaboards)", True),
             ("b3", "/b3", "Braintree Auth", True),
             ("b3auth", "/b3auth", "Braintree Auth (Session)", True),
+            ("b3charge", "/b3charge", "Braintree $1 Charge", True),
             ("authnet", "/authnet", "Authorize.net", True),
-            ("autosho", "/autosho", "Shopify Auto 🔜 Soon", False),
+            ("autostripe", "/autostripe", "Auto Stripe (WooCommerce)", True),
+            ("shopifygql", "/shopifygql", "Shopify GQL Direct", True),
+            ("autosho", "/autosho", "Shopify Auto (API)", True),
             ("st1", "/st1", "HiAPI Check3", True),
             ("st5", "/st5", "HiAPI Check", True),
         ]
@@ -2212,7 +2377,7 @@ def handle_update(update):
         return
 
     # --- Gate commands: /auth, /st1, /st5 (single card OR bulk file) ---
-    gate_map = {"/auth": ("auth", "Stripe Auth (Dilaboards)"), "/b3": ("b3", "Braintree Auth"), "/b3auth": ("b3auth", "Braintree Auth (Session)"), "/authnet": ("authnet", "Authorize.net"), "/autosho": ("autosho", "Shopify Auto"), "/st1": ("st1", "HiAPI Check3"), "/st5": ("st5", "HiAPI Check")}
+    gate_map = {"/auth": ("auth", "Stripe Auth (Dilaboards)"), "/b3": ("b3", "Braintree Auth"), "/b3auth": ("b3auth", "Braintree Auth (Session)"), "/b3charge": ("b3charge", "Braintree $1 Charge"), "/authnet": ("authnet", "Authorize.net"), "/autostripe": ("autostripe", "Auto Stripe (WooCommerce)"), "/shopifygql": ("shopifygql", "Shopify GQL Direct"), "/autosho": ("autosho", "Shopify Auto"), "/st1": ("st1", "HiAPI Check3"), "/st5": ("st5", "HiAPI Check")}
     cmd_base = text.split()[0] if text else ""
     if cmd_base in gate_map:
         gate, gate_label = gate_map[cmd_base]

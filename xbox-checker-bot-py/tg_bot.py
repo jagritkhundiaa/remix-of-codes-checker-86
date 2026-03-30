@@ -236,8 +236,20 @@ def probe_gate(gate_key):
             detail = f"HTTP {resp.status_code}" + (" | Braintree key found" if alive else " | No Braintree key")
         elif gate_key == "b3auth":
             alive, detail = b3auth_probe_site()
+        elif gate_key == "b3charge":
+            alive, detail = br3charge_probe_site()
         elif gate_key == "authnet":
             alive, detail = authnet_probe_site()
+        elif gate_key == "autostripe":
+            alive, detail = autostripe_probe_site()
+        elif gate_key == "shopifygql":
+            sites = load_shopify_sites()
+            if sites:
+                alive = True
+                detail = f"{len(sites)} sites loaded"
+            else:
+                alive = False
+                detail = "No sites in sites.txt"
         elif gate_key == "autosho":
             resp = requests.get('https://teamoicxkiller.online/code/index.php', headers={'User-Agent': _rand_ua()}, timeout=10, proxies=proxy)
             alive = resp.status_code in (200, 400, 403)

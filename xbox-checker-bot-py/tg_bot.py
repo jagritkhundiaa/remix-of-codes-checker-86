@@ -702,10 +702,24 @@ def _run_gate(gate, c_num, c_mm, c_yy, c_cvv, proxy_dict):
         return auth_check_card(cc_line, proxy_dict)
 
 
-def process_single_entry(entry, proxies_list, user_id, gate="auth"):
-    raw_proxy = random.choice(proxies_list) if proxies_list else None
-    proxy_dict = format_proxy(raw_proxy)
+def _get_rotating_proxy(proxies_list, max_tries=3):
+    """Get up to max_tries different proxies for rotation."""
+    if not proxies_list:
+        return [None]
+    tried = set()
+    result = []
+    for _ in range(min(max_tries, len(proxies_list))):
+        p = random.choice(proxies_list)
+        attempts = 0
+        while p in tried and attempts < 10:
+            p = random.choice(proxies_list)
+            attempts += 1
+        tried.add(p)
+        result.append(format_proxy(p))
+    return result
 
+
+def process_single_entry(entry, proxies_list, user_id, gate="auth"):
     try:
         c_data = entry.split('|')
         if len(c_data) == 4:
@@ -716,22 +730,31 @@ def process_single_entry(entry, proxies_list, user_id, gate="auth"):
                 if not any(c_num.startswith(b) for b in user_bin_list):
                     return "SKIPPED | BIN not allowed"
 
-            try:
-                result = _run_gate(gate, c_num, c_mm, c_yy, c_cvv, proxy_dict)
-            except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError):
-                if proxy_dict:
-                    try:
-                        result = _run_gate(gate, c_num, c_mm, c_yy, c_cvv, None)
-                    except Exception as e2:
-                        result = f"Error: {str(e2)}"
-                else:
-                    result = f"Error: connection failed"
+            # Try multiple proxies with rotation
+            proxy_candidates = _get_rotating_proxy(proxies_list, max_tries=3)
+            result = None
+            for proxy_dict in proxy_candidates:
+                try:
+                    result = _run_gate(gate, c_num, c_mm, c_yy, c_cvv, proxy_dict)
+                    # If result doesn't contain proxy errors, use it
+                    if not (proxy_dict and isinstance(result, str) and
+                            any(err in result for err in ["ProxyError", "Tunnel connection failed", "503 Service Unavailable", "connection failed"])):
+                        break
+                except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError):
+                    continue
+                except Exception as e:
+                    result = f"Error: {str(e)}"
+                    break
 
-            if proxy_dict and ("ProxyError" in result or "Tunnel connection failed" in result or "503 Service Unavailable" in result):
+            # Final fallback: direct connection
+            if result is None or (isinstance(result, str) and any(err in result for err in ["ProxyError", "Tunnel connection failed", "503 Service"])):
                 try:
                     result = _run_gate(gate, c_num, c_mm, c_yy, c_cvv, None)
                 except Exception as e2:
                     result = f"Error: {str(e2)}"
+
+            if result is None:
+                result = "Error: All proxies failed"
         else:
             result = "Error: Invalid Format"
     except Exception as e:

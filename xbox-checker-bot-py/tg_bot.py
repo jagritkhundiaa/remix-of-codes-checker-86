@@ -2211,7 +2211,7 @@ def handle_update(update):
 
         def _save_file():
             try:
-                content = download_file(file_id)
+                content = download_file(file_id, binary=True)
                 if not content:
                     send_message(chat_id, f"<b>Failed to download file.</b>\n\n<i>{DEVELOPER}</i>")
                     return

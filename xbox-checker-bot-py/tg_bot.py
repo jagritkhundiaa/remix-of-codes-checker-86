@@ -2098,13 +2098,21 @@ def handle_update(update):
                 if result.get('success'):
                     successes += 1
                     approved_list.append(line)
-                    send_message(chat_id,
-                        f"<b>✅ HIT</b>\n\n"
-                        f"<code>{line}</code>\n"
-                        f"Site: <code>{merchant}</code>\n"
-                        f"Time: <code>{result.get('response_time', 0):.1f}s</code>\n"
-                        f"[{i+1}/{total}]\n\n"
-                        f"<i>{DEVELOPER}</i>")
+                    hit_lines = [
+                        f"<b>✅ HIT — APPROVED!</b>\n",
+                        f"💳 <code>{line}</code>",
+                        f"🏢 Site: <code>{merchant}</code>",
+                    ]
+                    if ah_product and ah_product != 'Unknown':
+                        hit_lines.append(f"📦 Product: <code>{ah_product}</code>")
+                    if ah_amount:
+                        hit_lines.append(f"💰 Amount: <code>{ah_amount} {ah_currency}</code>")
+                    receipt = result.get('receipt_url')
+                    if receipt:
+                        hit_lines.append(f"🔗 Receipt: <code>{receipt[:80]}</code>")
+                    hit_lines.append(f"⏱️ Time: <code>{result.get('response_time', 0):.1f}s</code>")
+                    hit_lines.append(f"[{i+1}/{total}]\n\n<i>{DEVELOPER}</i>")
+                    send_message(chat_id, "\n".join(hit_lines))
                     notify_hit(user_id, username, f"AutoHitter ({provider})", line, "Approved")
                 else:
                     fails += 1

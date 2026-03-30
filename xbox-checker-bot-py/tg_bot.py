@@ -1302,7 +1302,155 @@ def handle_update(update):
         send_message(chat_id, f"<b>VBV/3DS Check</b>\n\n{result}\n\n<i>{DEVELOPER}</i>")
         return
 
-    # --- /analyze ---
+    # --- /binquality ---
+    if text.startswith("/binquality"):
+        if not is_authorized(user_id):
+            send_message(chat_id, fmt_unauthorized())
+            return
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            send_message(chat_id,
+                "<b>BIN Quality Check</b>\n\n"
+                "<b>Usage:</b> <code>/binquality 424242</code>\n\n"
+                "Auto-generates 10 cards from BIN, checks each\n"
+                f"with Stripe Auth, and rates the BIN quality.\n\n<i>{DEVELOPER}</i>")
+            return
+
+        bin_input = parts[1].strip().split('|')[0].strip()
+        if len(bin_input) < 6:
+            send_message(chat_id, f"<b>BIN must be at least 6 digits.</b>\n\n<i>{DEVELOPER}</i>")
+            return
+
+        with active_lock:
+            if user_id in active_users:
+                send_message(chat_id, f"<b>You already have a task running.</b>\n\n<i>{DEVELOPER}</i>")
+                return
+            active_users.add(user_id)
+
+        cancel_flags.pop(user_id, None)
+
+        init_resp = send_message(chat_id,
+            f"<b>BIN Quality Check</b>\n\n"
+            f"BIN: <code>{bin_input}</code>\n"
+            f"Generating 10 cards...",
+            reply_markup=stop_button_markup(user_id))
+        progress_msg_id = init_resp.get("result", {}).get("message_id")
+
+        def _run_binquality():
+            try:
+                cards = generate_cards(bin_input, 10)
+                if not cards:
+                    send_message(chat_id, f"<b>Failed to generate cards from BIN.</b>\n\n<i>{DEVELOPER}</i>")
+                    with active_lock:
+                        active_users.discard(user_id)
+                    return
+
+                if progress_msg_id:
+                    edit_message(chat_id, progress_msg_id,
+                        f"<b>BIN Quality Check</b>\n\n"
+                        f"BIN: <code>{bin_input}</code>\n"
+                        f"Generated: <code>{len(cards)}</code>\n"
+                        f"Checking with Stripe Auth...\n\n"
+                        f"Progress: <code>0/{len(cards)}</code>",
+                        reply_markup=stop_button_markup(user_id))
+
+                proxies_list = list(_global_proxies) if _global_proxies else []
+                approved = 0
+                declined = 0
+                errors = 0
+                approved_cards = []
+                total = len(cards)
+
+                for i, card in enumerate(cards):
+                    if cancel_flags.get(user_id):
+                        break
+
+                    result = process_single_entry(card, proxies_list, user_id, gate="auth")
+                    r_lower = result.lower() if isinstance(result, str) else ""
+
+                    if "approved" in r_lower or "charged" in r_lower:
+                        approved += 1
+                        approved_cards.append(card)
+                    elif "declined" in r_lower:
+                        declined += 1
+                    else:
+                        errors += 1
+
+                    # Update progress every 2 cards or at end
+                    now_idx = i + 1
+                    if progress_msg_id and (now_idx % 2 == 0 or now_idx == total):
+                        pct = int(now_idx / total * 100)
+                        bar_len = 12
+                        filled = int(bar_len * now_idx / total)
+                        bar = "█" * filled + "░" * (bar_len - filled)
+                        edit_message(chat_id, progress_msg_id,
+                            f"<b>BIN Quality Check</b>\n\n"
+                            f"BIN: <code>{bin_input}</code>\n"
+                            f"<code>{bar}</code> {pct}%\n\n"
+                            f"Progress: <code>{now_idx}/{total}</code>\n"
+                            f"Approved: <code>{approved}</code>\n"
+                            f"Declined: <code>{declined}</code>\n"
+                            f"Errors: <code>{errors}</code>",
+                            reply_markup=stop_button_markup(user_id) if now_idx < total else None)
+
+                cancel_flags.pop(user_id, None)
+
+                # Determine quality
+                hit_rate = (approved / total * 100) if total > 0 else 0
+                if hit_rate >= 50:
+                    quality = "PREMIUM BIN"
+                    quality_desc = "High approval rate — strong for charges"
+                elif hit_rate >= 20:
+                    quality = "GOOD BIN"
+                    quality_desc = "Decent approval rate — usable"
+                elif hit_rate > 0:
+                    quality = "LOW BIN"
+                    quality_desc = "Low approval rate — mostly generated/dead"
+                else:
+                    quality = "DEAD BIN"
+                    quality_desc = "Zero approvals — likely all generated/killed"
+
+                # BIN info
+                try:
+                    info, _ = bin_lookup(bin_input[:6])
+                except Exception:
+                    info = None
+
+                bin_line = ""
+                if info:
+                    bin_line = (
+                        f"Brand: <code>{info.get('brand', 'N/A')}</code>\n"
+                        f"Bank: <code>{info.get('bank', 'N/A')}</code>\n"
+                        f"Country: <code>{info.get('country', 'N/A')}</code> {info.get('emoji', '')}\n"
+                    )
+
+                approved_text = ""
+                if approved_cards:
+                    approved_text = "\n<b>Approved Cards:</b>\n" + "\n".join(f"<code>{c}</code>" for c in approved_cards) + "\n"
+
+                send_message(chat_id,
+                    f"<b>BIN Quality — {quality}</b>\n\n"
+                    f"BIN: <code>{bin_input}</code>\n"
+                    f"{bin_line}"
+                    f"\nChecked: <code>{total}</code>\n"
+                    f"Approved: <code>{approved}</code>\n"
+                    f"Declined: <code>{declined}</code>\n"
+                    f"Errors: <code>{errors}</code>\n"
+                    f"Hit Rate: <code>{hit_rate:.0f}%</code>\n\n"
+                    f"<b>Verdict:</b> {quality_desc}\n"
+                    f"{approved_text}\n"
+                    f"<i>{DEVELOPER}</i>")
+
+            except Exception as e:
+                send_message(chat_id, f"<b>Error:</b> {str(e)[:80]}\n\n<i>{DEVELOPER}</i>")
+            finally:
+                with active_lock:
+                    active_users.discard(user_id)
+
+        threading.Thread(target=_run_binquality, daemon=True).start()
+        return
+
+
     if text.startswith("/analyze"):
         parts = text.split(maxsplit=1)
         if len(parts) < 2:

@@ -1833,12 +1833,131 @@ def handle_update(update):
         send_message(chat_id, fmt_start(is_adm=is_admin(user_id)))
         return
 
-    # --- /lookup ---
-    if text == "/lookup":
-        send_message(chat_id, f"<b>Lookup</b>\n\nComing soon.{FOOTER}")
+    # --- /gen <BIN> [count] — Card generator ---
+    if text.startswith("/gen"):
+        cmd_word = text.split()[0]
+        if cmd_word == "/gen":
+            if not is_authorized(user_id):
+                send_message(chat_id, fmt_unauthorized())
+                return
+            parts = text.split()
+            if len(parts) < 2:
+                send_message(chat_id, "<b>Usage:</b> <code>/gen 424242 10</code>\n\nFormats: <code>424242</code> or <code>424242|MM|YY|CVV</code>\nUse <code>x</code> for random digits" + FOOTER)
+                return
+            bin_input = parts[1]
+            count = 10
+            if len(parts) >= 3:
+                try:
+                    count = min(int(parts[2]), 50)
+                except ValueError:
+                    count = 10
+            cards = generate_cards(bin_input, count)
+            if not cards:
+                send_message(chat_id, "<b>Invalid BIN.</b>" + FOOTER)
+                return
+            card_text = "\n".join(f"<code>{c}</code>" for c in cards)
+            send_message(chat_id,
+                f"<b>🎴 Generated {len(cards)} Cards</b>\n"
+                f"{'─' * 28}\n\n"
+                f"BIN: <code>{bin_input}</code>\n\n"
+                f"{card_text}" + FOOTER)
+            return
+
+    # --- /binlookup <BIN> — BIN info lookup ---
+    if text.startswith("/binlookup"):
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            send_message(chat_id, "<b>Usage:</b> <code>/binlookup 424242</code>" + FOOTER)
+            return
+        bin_num = parts[1].strip().split('|')[0][:6]
+        info, err = bin_lookup(bin_num)
+        if info:
+            send_message(chat_id,
+                f"<b>🔍 BIN Lookup — {bin_num}</b>\n"
+                f"{'─' * 28}\n\n"
+                f"Brand: <code>{info['brand']}</code>\n"
+                f"Type: <code>{info['type']}</code>\n"
+                f"Bank: <code>{info['bank']}</code>\n"
+                f"Country: <code>{info['country']}</code> {info['emoji']}" + FOOTER)
+        else:
+            send_message(chat_id, f"<b>BIN Lookup Failed</b>\n\n{err}" + FOOTER)
         return
 
-    # (dead gates removed — no coming soon handler needed)
+    # --- /vbv <CC|MM|YY|CVV> — VBV/3DS check ---
+    if text.startswith("/vbv"):
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            send_message(chat_id, "<b>Usage:</b> <code>/vbv 4111111111111111</code>" + FOOTER)
+            return
+        result = vbv_lookup(parts[1].strip())
+        send_message(chat_id, f"<b>🔒 VBV/3DS Check</b>\n{'─' * 28}\n\n{result}" + FOOTER)
+        return
+
+    # --- /analyze <URL> — URL payment provider detection ---
+    if text.startswith("/analyze"):
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            send_message(chat_id, "<b>Usage:</b> <code>/analyze https://example.com</code>" + FOOTER)
+            return
+        if not is_authorized(user_id):
+            send_message(chat_id, fmt_unauthorized())
+            return
+        url = parts[1].strip()
+        send_message(chat_id, f"<b>🔍 Analyzing...</b>\n<code>{url[:60]}</code>")
+
+        def _do_analyze():
+            info = analyze_url(url)
+            provider = info.get('provider', 'unknown')
+            merchant = info.get('merchant', 'Unknown')
+            product = info.get('product', '-')
+            amount = info.get('amount', '-')
+            currency = info.get('currency', 'USD')
+            stripe_key = info.get('stripe_key', '-')
+            error = info.get('error')
+
+            lines = [
+                f"<b>🌐 URL Analysis</b>",
+                f"{'─' * 28}\n",
+                f"URL: <code>{url[:80]}</code>",
+                f"Provider: <code>{provider.upper()}</code>",
+                f"Merchant: <code>{merchant}</code>",
+            ]
+            if product and product != '-':
+                lines.append(f"Product: <code>{product}</code>")
+            if amount:
+                lines.append(f"Amount: <code>{amount} {currency}</code>")
+            if stripe_key and stripe_key != '-':
+                lines.append(f"Stripe Key: <code>{stripe_key[:20]}...</code>")
+            if error:
+                lines.append(f"⚠️ Error: {error}")
+            lines.append(FOOTER)
+            send_message(chat_id, "\n".join(lines))
+
+        threading.Thread(target=_do_analyze, daemon=True).start()
+        return
+
+    # --- /scrapeproxies (admin only) — Scrape fresh proxies ---
+    if text == "/scrapeproxies":
+        if not is_admin(user_id):
+            return
+        send_message(chat_id, "<b>🔄 Scraping proxies...</b>")
+
+        def _do_scrape():
+            proxies = scrape_proxies()
+            if proxies:
+                # Save to proxies.txt
+                with open(PROXIES_FILE, 'w') as f:
+                    f.write('\n'.join(proxies))
+                load_global_proxies()
+                send_message(chat_id,
+                    f"<b>✅ Scraped {len(proxies)} Proxies</b>\n\n"
+                    f"Saved to proxies.txt and loaded into pool.\n"
+                    f"Active proxies: <code>{get_proxy_count()}</code>" + FOOTER)
+            else:
+                send_message(chat_id, "<b>❌ Failed to scrape proxies.</b>" + FOOTER)
+
+        threading.Thread(target=_do_scrape, daemon=True).start()
+        return
 
     # --- /adminkey <user_id> <duration> (owner only) ---
     if text.startswith("/adminkey"):

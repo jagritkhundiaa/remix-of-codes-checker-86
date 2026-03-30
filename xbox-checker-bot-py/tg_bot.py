@@ -1973,22 +1973,7 @@ def handle_update(update):
             threading.Thread(target=_single_hit, daemon=True).start()
             return
 
-        # Bulk mode
-        reply = msg.get("reply_to_message")
-        if not reply or not reply.get("document"):
-            send_message(chat_id,
-                "<b>Usage</b>\n\n"
-                "Reply to a .txt file with cards:\n"
-                f"<code>/autohitter {target_url[:40]}...</code>\n\n"
-                f"<i>{DEVELOPER}</i>")
-            return
-
-        doc = reply["document"]
-        fname = doc.get("file_name", "")
-        if not fname.lower().endswith(".txt"):
-            send_message(chat_id, f"<b>Only .txt files are accepted.</b>\n\n<i>{DEVELOPER}</i>")
-            return
-
+        # Bulk mode — card_lines already populated above
         with active_lock:
             if user_id in active_users:
                 send_message(chat_id, f"<b>You already have a task running.</b>\n\n<i>{DEVELOPER}</i>")
@@ -1997,35 +1982,22 @@ def handle_update(update):
 
         cancel_flags.pop(user_id, None)
 
-        content = download_file(doc["file_id"])
-        if not content:
-            with active_lock:
-                active_users.discard(user_id)
-            send_message(chat_id, f"<b>Failed to download file.</b>\n\n<i>{DEVELOPER}</i>")
-            return
-
-        card_lines = [l.strip() for l in content.splitlines() if l.strip() and '|' in l.strip()]
-        if not card_lines:
-            with active_lock:
-                active_users.discard(user_id)
-            send_message(chat_id, f"<b>No valid cards found in file.</b>\n\n<i>{DEVELOPER}</i>")
-            return
-
         user_limit = get_user_line_limit(user_id)
         if user_limit and len(card_lines) > user_limit:
             with active_lock:
                 active_users.discard(user_id)
             send_message(chat_id,
-                f"<b>File Too Large</b>\n\n"
+                f"<b>Too Many Cards</b>\n\n"
                 f"Your key allows <code>{user_limit}</code> lines.\n"
-                f"Your file has <code>{len(card_lines)}</code> lines.\n\n"
+                f"Provided: <code>{len(card_lines)}</code> cards.\n\n"
                 f"<i>{DEVELOPER}</i>")
             return
 
+        bin_label = " (BIN gen)" if is_bin_mode else ""
         init_resp = send_message(
             chat_id,
-            f"<b>AutoHitter Starting...</b>\n\n"
-            f"Target: <code>{target_url[:60]}</code>\n"
+            f"<b>⚡ AutoHitter Starting{bin_label}</b>\n\n"
+            f"Site: <code>{site_name}</code>\n"
             f"Cards: <code>{len(card_lines)}</code>",
             reply_markup=stop_button_markup(user_id)
         )
@@ -2033,7 +2005,7 @@ def handle_update(update):
 
         def _run_autohitter():
             try:
-                from dlx_autohitter import URLAnalyzer, hit_single, parse_card_line, detect_provider, SUPPORTED_PROVIDERS, SmartRateLimiter
+                from dlx_autohitter import URLAnalyzer, hit_single, parse_card_line as ah_parse_card, detect_provider, SUPPORTED_PROVIDERS, SmartRateLimiter
             except ImportError:
                 send_message(chat_id, f"<b>AutoHitter module not available.</b>\n\n<i>{DEVELOPER}</i>")
                 with active_lock:
@@ -2042,10 +2014,12 @@ def handle_update(update):
 
             url_info = URLAnalyzer.analyze(target_url)
             provider = url_info.get('provider', 'unknown')
+            merchant = url_info.get('merchant', site_name)
 
             if provider not in SUPPORTED_PROVIDERS:
                 send_message(chat_id,
                     f"<b>Unsupported Provider</b>\n\n"
+                    f"Site: <code>{site_name}</code>\n"
                     f"Detected: <code>{provider.upper()}</code>\n\n"
                     f"<i>{DEVELOPER}</i>")
                 with active_lock:
@@ -2054,10 +2028,11 @@ def handle_update(update):
 
             if progress_msg_id:
                 edit_message(chat_id, progress_msg_id,
-                    f"<b>AutoHitter Active</b>\n\n"
+                    f"<b>⚡ AutoHitter Active</b>\n\n"
+                    f"Site: <code>{merchant}</code>\n"
                     f"Provider: <code>{provider.upper()}</code>\n"
                     f"Cards: <code>{len(card_lines)}</code>\n"
-                    f"Analyzing...",
+                    f"Processing...",
                     reply_markup=stop_button_markup(user_id))
 
             rate_limiter = SmartRateLimiter()
@@ -2075,7 +2050,7 @@ def handle_update(update):
                 if cancel_flags.get(user_id):
                     break
 
-                card = parse_card_line(line)
+                card = ah_parse_card(line)
                 if not card:
                     fails += 1
                     continue
@@ -2090,8 +2065,9 @@ def handle_update(update):
                     successes += 1
                     approved_list.append(line)
                     send_message(chat_id,
-                        f"<b>HIT</b>\n\n"
+                        f"<b>✅ HIT</b>\n\n"
                         f"<code>{line}</code>\n"
+                        f"Site: <code>{merchant}</code>\n"
                         f"Time: <code>{result.get('response_time', 0):.1f}s</code>\n"
                         f"[{i+1}/{total}]\n\n"
                         f"<i>{DEVELOPER}</i>")
@@ -2111,13 +2087,14 @@ def handle_update(update):
 
                     markup = None if (i + 1 == total) else stop_button_markup(user_id)
                     edit_message(chat_id, progress_msg_id,
-                        f"<b>AutoHitter {'Complete' if i+1==total else 'Active'}</b>\n\n"
+                        f"<b>⚡ AutoHitter {'Complete' if i+1==total else 'Active'}</b>\n\n"
+                        f"Site: <code>{merchant}</code>\n"
                         f"<code>{bar}</code> {pct}%\n\n"
                         f"Provider: <code>{provider.upper()}</code>\n"
                         f"Progress: <code>{i+1}/{total}</code>\n"
                         f"Speed: <code>{cpm} CPM</code>\n\n"
-                        f"Approved: <code>{successes}</code>\n"
-                        f"Failed: <code>{fails}</code>\n\n"
+                        f"✅ Approved: <code>{successes}</code>\n"
+                        f"❌ Failed: <code>{fails}</code>\n\n"
                         f"<i>{DEVELOPER}</i>",
                         reply_markup=markup)
 
@@ -2125,11 +2102,12 @@ def handle_update(update):
             cancel_flags.pop(user_id, None)
 
             send_message(chat_id,
-                f"<b>AutoHitter Complete</b>\n\n"
+                f"<b>⚡ AutoHitter Complete</b>\n\n"
+                f"Site: <code>{merchant}</code>\n"
                 f"Provider: <code>{provider.upper()}</code>\n"
                 f"Total: <code>{total}</code>\n"
-                f"Approved: <code>{successes}</code>\n"
-                f"Failed: <code>{fails}</code>\n\n"
+                f"✅ Approved: <code>{successes}</code>\n"
+                f"❌ Failed: <code>{fails}</code>\n\n"
                 f"<i>{DEVELOPER}</i>")
 
             if approved_list:

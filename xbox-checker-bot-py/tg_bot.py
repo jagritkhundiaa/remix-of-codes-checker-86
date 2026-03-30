@@ -1960,29 +1960,38 @@ def handle_update(update):
                 result = loop.run_until_complete(hit_single(target_url, card, 1))
                 loop.close()
 
+                receipt = result.get('receipt_url')
                 if result.get('success'):
-                    send_message(chat_id,
-                        f"<b>✅ APPROVED</b>\n\n"
-                        f"Card: <code>{cc_line}</code>\n"
-                        f"Site: <code>{merchant}</code>\n"
-                        f"Provider: <code>{provider.upper()}</code>\n"
-                        f"Time: <code>{result.get('response_time', 0):.1f}s</code>\n\n"
-                        f"<i>{DEVELOPER}</i>")
+                    hit_lines = [
+                        "<b>✅ APPROVED — HIT!</b>\n",
+                        f"💳 Card: <code>{cc_line}</code>",
+                        f"🏢 Site: <code>{merchant}</code>",
+                        f"🔌 Provider: <code>{provider.upper()}</code>",
+                    ]
+                    if product and product != 'Unknown':
+                        hit_lines.append(f"📦 Product: <code>{product}</code>")
+                    if amount:
+                        hit_lines.append(f"💰 Amount: <code>{amount} {currency}</code>")
+                    hit_lines.append(f"⏱️ Time: <code>{result.get('response_time', 0):.1f}s</code>")
+                    if receipt:
+                        hit_lines.append(f"🔗 Receipt: <code>{receipt[:80]}</code>")
+                    hit_lines.append(f"\n<i>{DEVELOPER}</i>")
+                    send_message(chat_id, "\n".join(hit_lines))
                     notify_hit(user_id, username, f"AutoHitter ({provider})", cc_line, "Approved")
                 elif result.get('error'):
                     send_message(chat_id,
                         f"<b>⚠️ ERROR</b>\n\n"
-                        f"Card: <code>{cc_line}</code>\n"
-                        f"Site: <code>{site_name}</code>\n"
+                        f"💳 Card: <code>{cc_line}</code>\n"
+                        f"🏢 Site: <code>{site_name}</code>\n"
                         f"Error: <code>{result['error'][:80]}</code>\n\n"
                         f"<i>{DEVELOPER}</i>")
                 else:
                     send_message(chat_id,
                         f"<b>❌ DECLINED</b>\n\n"
-                        f"Card: <code>{cc_line}</code>\n"
-                        f"Site: <code>{site_name}</code>\n"
-                        f"Reason: <code>{result.get('decline_code', 'unknown')}</code>\n"
-                        f"Time: <code>{result.get('response_time', 0):.1f}s</code>\n\n"
+                        f"💳 Card: <code>{cc_line}</code>\n"
+                        f"🏢 Site: <code>{site_name}</code>\n"
+                        f"📉 Reason: <code>{result.get('decline_code', 'unknown')}</code>\n"
+                        f"⏱️ Time: <code>{result.get('response_time', 0):.1f}s</code>\n\n"
                         f"<i>{DEVELOPER}</i>")
 
             threading.Thread(target=_single_hit, daemon=True).start()

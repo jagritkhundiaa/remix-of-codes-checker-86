@@ -96,26 +96,37 @@ def _get_bin_info(bin6):
     """Multi-API BIN lookup."""
     bin6 = bin6.replace(" ", "")[:8]
     apis = [
-        f"https://lookup.binlist.net/{bin6}",
-        f"https://data.handyapi.com/bin/{bin6[:6]}",
-        f"https://api.bincheck.io/bin/{bin6[:6]}",
+        f"https://api.voidex.dev/api/bin?bin={bin6[:6]}",
+        f"https://binsapi.vercel.app/api/bin/{bin6[:6]}",
+        f"https://lookup.binlist.net/{bin6[:6]}",
     ]
     for api in apis:
         try:
             r = requests.get(api, timeout=4)
             if r.status_code == 200:
                 data = r.json()
-                brand = (data.get('scheme') or data.get('brand') or 'N/A').upper()
-                bank = (data.get('bank', {}).get('name') or data.get('Bank') or 'N/A').upper()
-                country = (data.get('country', {}).get('name') or 'N/A').upper()
-                emoji = data.get('country', {}).get('emoji') or '🏳️'
-                return {
-                    "brand": brand, "bank": bank,
-                    "country": country, "emoji": emoji,
-                }
+                brand = (data.get('scheme') or data.get('brand') or data.get('Brand') or 'N/A').upper()
+                bank = (data.get('bank', {}).get('name') if isinstance(data.get('bank'), dict) else data.get('bank') or data.get('Bank') or 'N/A')
+                if isinstance(bank, str):
+                    bank = bank.upper()
+                else:
+                    bank = 'N/A'
+                country = (data.get('country', {}).get('name') if isinstance(data.get('country'), dict) else data.get('country') or data.get('Country') or 'N/A')
+                if isinstance(country, str):
+                    country = country.upper()
+                else:
+                    country = 'N/A'
+                emoji = (data.get('country', {}).get('emoji') if isinstance(data.get('country'), dict) else data.get('emoji') or '')
+                if not emoji:
+                    emoji = ''
+                if brand != 'N/A' or bank != 'N/A':
+                    return {
+                        "brand": brand, "bank": bank,
+                        "country": country, "emoji": emoji,
+                    }
         except Exception:
             continue
-    return {"brand": "UNKNOWN", "bank": "UNKNOWN", "country": "UNKNOWN", "emoji": "🏳️"}
+    return {"brand": "UNKNOWN", "bank": "UNKNOWN", "country": "UNKNOWN", "emoji": ""}
 
 
 def _process_card(cc, mm, yy, cvv, proxy_dict=None):
@@ -152,7 +163,7 @@ def _process_card(cc, mm, yy, cvv, proxy_dict=None):
             return {"status": "Error", "response": "Setup nonce not found"}
         addnonce = nonce_match.group(1)
 
-        time.sleep(random.uniform(2.0, 3.0))
+        time.sleep(random.uniform(0.5, 1.2))
 
         # Step 2: Create payment method on Stripe
         stripe_headers = {

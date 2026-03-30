@@ -39,7 +39,7 @@ except ImportError:
 #  Configuration
 # ============================================================
 BOT_TOKEN = "8190896455:AAFXvW4eVTDvESHw_SHYxHCRXngxYnMJKqc"
-DEVELOPER = "TalkNeon"
+DEVELOPER = "Neon"
 ADMIN_IDS = [5342093297]
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")

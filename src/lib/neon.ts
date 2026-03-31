@@ -28,6 +28,7 @@ export interface CheckResult {
   responseTime: number;
   bin: string;
   brand: string;
+  mode?: string;
 }
 
 export interface HitStats {
@@ -36,6 +37,72 @@ export interface HitStats {
   declines: number;
   errors: number;
   avgTime: number;
+}
+
+export interface NeonSettings {
+  hitterEnabled: boolean;
+  bypasserEnabled: boolean;
+  autoTelegram: boolean;
+  delayMs: number;
+}
+
+export const DEFAULT_SETTINGS: NeonSettings = {
+  hitterEnabled: true,
+  bypasserEnabled: false,
+  autoTelegram: true,
+  delayMs: 800,
+};
+
+export function loadSettings(): NeonSettings {
+  try {
+    const saved = localStorage.getItem('neon_settings');
+    if (saved) return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+  } catch {}
+  return { ...DEFAULT_SETTINGS };
+}
+
+export function saveSettings(settings: NeonSettings) {
+  localStorage.setItem('neon_settings', JSON.stringify(settings));
+}
+
+export interface AccessKeyData {
+  id: string;
+  key: string;
+  label: string | null;
+  is_active: boolean;
+  is_admin: boolean;
+  created_at: string;
+  expires_at: string | null;
+  usage_count: number;
+}
+
+export interface ProxyData {
+  id: string;
+  proxy: string;
+  protocol: string;
+  is_active: boolean;
+  last_checked: string | null;
+  last_status: string | null;
+  success_count: number;
+  fail_count: number;
+  created_at: string;
+}
+
+export interface LogEntry {
+  id: string;
+  created_at: string;
+  access_key: string;
+  card_masked: string;
+  bin: string;
+  brand: string;
+  status: string;
+  code: string;
+  message: string;
+  merchant: string;
+  amount: string | null;
+  response_time: number;
+  mode: string;
+  provider: string;
 }
 
 // ============= CARD GENERATOR =============
@@ -73,7 +140,6 @@ export function generateCard(binInput: string): CardData | null {
   const targetLen = brand === 'amex' ? 15 : 16;
   const cvvLen = brand === 'amex' ? 4 : 3;
 
-  // Build card number
   let card = '';
   for (const c of binPattern) {
     card += /[xX]/.test(c) ? String(Math.floor(Math.random() * 10)) : c;
@@ -84,7 +150,6 @@ export function generateCard(binInput: string): CardData | null {
     card += String(Math.floor(Math.random() * 10));
   }
 
-  // Luhn check digit
   for (let i = 0; i <= 9; i++) {
     if (luhnCheck(card + String(i))) {
       card += String(i);
@@ -94,20 +159,17 @@ export function generateCard(binInput: string): CardData | null {
 
   if (card.length < targetLen) card += '0';
 
-  // Month
   let month = String(Math.floor(Math.random() * 12) + 1).padStart(2, '0');
   if (parts[1] && parts[1].toLowerCase() !== 'xx') {
     month = parts[1].padStart(2, '0');
   }
 
-  // Year
   const currentYear = new Date().getFullYear();
   let year = String(currentYear + Math.floor(Math.random() * 5) + 1).slice(-2);
   if (parts[2] && parts[2].toLowerCase() !== 'xx') {
     year = parts[2].padStart(2, '0');
   }
 
-  // CVV
   let cvv = Array.from({ length: cvvLen }, () => String(Math.floor(Math.random() * 10))).join('');
   if (parts[3] && !/^x+$/i.test(parts[3])) {
     cvv = parts[3].padStart(cvvLen, '0');

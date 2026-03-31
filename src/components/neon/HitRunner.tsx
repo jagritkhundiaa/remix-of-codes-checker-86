@@ -1,15 +1,16 @@
 import { useState, useRef, useEffect } from "react";
 import { Play, Square, Loader2, CheckCircle, XCircle, Shield, Zap } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { CardData, CheckResult, HitStats, UrlAnalysis } from "@/lib/neon";
+import { CardData, CheckResult, HitStats, UrlAnalysis, NeonSettings } from "@/lib/neon";
 
 interface HitRunnerProps {
   accessKey: string;
   analysis: UrlAnalysis | null;
   cards: CardData[];
+  settings: NeonSettings;
 }
 
-export default function HitRunner({ accessKey, analysis, cards }: HitRunnerProps) {
+export default function HitRunner({ accessKey, analysis, cards, settings }: HitRunnerProps) {
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<CheckResult[]>([]);
   const [current, setCurrent] = useState(0);
@@ -18,12 +19,39 @@ export default function HitRunner({ accessKey, analysis, cards }: HitRunnerProps
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [results]);
 
-  const canStart = analysis?.success && analysis?.stripePk && cards.length > 0 && !running;
+  const canStart = analysis?.success && analysis?.stripePk && cards.length > 0 && !running && (settings.hitterEnabled || settings.bypasserEnabled);
+
+  const runCheck = async (card: CardData, mode: string): Promise<CheckResult | null> => {
+    try {
+      const { data } = await supabase.functions.invoke("neon-check", {
+        body: {
+          card,
+          provider: analysis!.provider,
+          stripePk: analysis!.stripePk,
+          clientSecret: analysis!.clientSecret,
+          merchant: analysis!.merchant,
+          amount: analysis!.amount,
+          accessKey,
+          mode,
+        },
+      });
+      if (data && !data.error) return data as CheckResult;
+      return {
+        card: `${card.number.slice(0, 6)}...${card.number.slice(-4)}`,
+        status: "error", code: "fn_error", message: data?.error || "Function error",
+        responseTime: 0, bin: card.number.slice(0, 6), brand: "UNK", mode,
+      };
+    } catch {
+      return {
+        card: `${card.number.slice(0, 6)}...${card.number.slice(-4)}`,
+        status: "error", code: "network", message: "Network error",
+        responseTime: 0, bin: card.number.slice(0, 6), brand: "UNK", mode,
+      };
+    }
+  };
 
   const handleStart = async () => {
     if (!canStart || !analysis) return;
@@ -33,83 +61,43 @@ export default function HitRunner({ accessKey, analysis, cards }: HitRunnerProps
     setCurrent(0);
     setStats({ total: 0, hits: 0, declines: 0, errors: 0, avgTime: 0 });
 
-    let totalTime = 0;
-    let hits = 0;
-    let declines = 0;
-    let errors = 0;
+    let totalTime = 0, hits = 0, declines = 0, errors = 0;
 
     for (let i = 0; i < cards.length; i++) {
       if (stopRef.current) break;
       setCurrent(i + 1);
 
-      try {
-        const { data } = await supabase.functions.invoke("neon-check", {
-          body: {
-            card: cards[i],
-            provider: analysis.provider,
-            stripePk: analysis.stripePk,
-            clientSecret: analysis.clientSecret,
-            merchant: analysis.merchant,
-            amount: analysis.amount,
-            accessKey,
-          },
-        });
+      const modes: string[] = [];
+      if (settings.hitterEnabled) modes.push('hitter');
+      if (settings.bypasserEnabled) modes.push('bypasser');
 
-        if (data && !data.error) {
-          const result = data as CheckResult;
-          setResults((prev) => [...prev, result]);
-          totalTime += result.responseTime;
+      for (const mode of modes) {
+        if (stopRef.current) break;
+        const result = await runCheck(cards[i], mode);
+        if (!result) { errors++; continue; }
 
-          if (result.status === "live" || result.status === "charged" || result.status === "3ds") {
-            hits++;
-          } else if (result.status === "declined") {
-            declines++;
-          } else {
-            errors++;
-          }
+        setResults(prev => [...prev, result]);
+        totalTime += result.responseTime;
 
-          setStats({
-            total: i + 1,
-            hits,
-            declines,
-            errors,
-            avgTime: totalTime / (i + 1),
-          });
+        if (result.status === "live" || result.status === "charged" || result.status === "3ds") {
+          hits++;
+          // If hit found and both modes enabled, skip other mode for this card
+          break;
+        } else if (result.status === "declined") {
+          declines++;
         } else {
           errors++;
-          setResults((prev) => [...prev, {
-            card: `${cards[i].number.slice(0, 6)}...${cards[i].number.slice(-4)}`,
-            status: "error",
-            code: "fn_error",
-            message: data?.error || "Function error",
-            responseTime: 0,
-            bin: cards[i].number.slice(0, 6),
-            brand: "UNK",
-          }]);
-          setStats({
-            total: i + 1,
-            hits,
-            declines,
-            errors,
-            avgTime: totalTime / (i + 1),
-          });
         }
-      } catch {
-        errors++;
-        setStats((s) => ({ ...s, total: i + 1, errors }));
       }
 
-      // Small delay between checks
+      setStats({ total: i + 1, hits, declines, errors, avgTime: totalTime / (i + 1) });
+
       if (i < cards.length - 1 && !stopRef.current) {
-        await new Promise((r) => setTimeout(r, 800 + Math.random() * 400));
+        await new Promise(r => setTimeout(r, settings.delayMs + Math.random() * 400));
       }
     }
 
     setRunning(false);
-  };
-
-  const handleStop = () => {
-    stopRef.current = true;
   };
 
   const getStatusIcon = (status: string) => {
@@ -140,22 +128,19 @@ export default function HitRunner({ accessKey, analysis, cards }: HitRunnerProps
         <div className="flex items-center gap-2">
           <Zap className="w-4 h-4 text-primary" />
           <h2 className="text-sm font-bold uppercase tracking-wider text-primary">Engine</h2>
+          {settings.hitterEnabled && <span className="text-[9px] px-1.5 py-0.5 rounded bg-primary/10 text-primary font-bold">HIT</span>}
+          {settings.bypasserEnabled && <span className="text-[9px] px-1.5 py-0.5 rounded bg-accent/20 text-accent-foreground font-bold">BYP</span>}
         </div>
 
         <div className="flex gap-2">
           {!running ? (
-            <button
-              onClick={handleStart}
-              disabled={!canStart}
-              className="h-9 px-5 rounded-xl bg-primary text-primary-foreground font-bold text-xs flex items-center gap-1.5 hover:opacity-90 transition-all disabled:opacity-30 disabled:cursor-not-allowed glow-primary"
-            >
+            <button onClick={handleStart} disabled={!canStart}
+              className="h-9 px-5 rounded-xl bg-primary text-primary-foreground font-bold text-xs flex items-center gap-1.5 hover:opacity-90 transition-all disabled:opacity-30 disabled:cursor-not-allowed glow-primary">
               <Play className="w-3 h-3" /> Start
             </button>
           ) : (
-            <button
-              onClick={handleStop}
-              className="h-9 px-5 rounded-xl bg-destructive text-destructive-foreground font-bold text-xs flex items-center gap-1.5 hover:opacity-90 transition-all"
-            >
+            <button onClick={() => { stopRef.current = true; }}
+              className="h-9 px-5 rounded-xl bg-destructive text-destructive-foreground font-bold text-xs flex items-center gap-1.5 hover:opacity-90 transition-all">
               <Square className="w-3 h-3" /> Stop
             </button>
           )}
@@ -164,11 +149,10 @@ export default function HitRunner({ accessKey, analysis, cards }: HitRunnerProps
 
       {!canStart && !running && (
         <div className="text-xs text-muted-foreground bg-background/30 rounded-xl px-3 py-2 mb-4">
-          {!analysis?.success ? "Fetch a URL first" : !analysis?.stripePk ? "No Stripe key found on page" : cards.length === 0 ? "Load cards first" : ""}
+          {!analysis?.success ? "Fetch a URL first" : !analysis?.stripePk ? "No Stripe key found" : cards.length === 0 ? "Load cards first" : !settings.hitterEnabled && !settings.bypasserEnabled ? "Enable hitter or bypasser in settings" : ""}
         </div>
       )}
 
-      {/* Progress */}
       {(running || results.length > 0) && (
         <>
           <div className="mb-4">
@@ -180,14 +164,10 @@ export default function HitRunner({ accessKey, analysis, cards }: HitRunnerProps
               <span className="text-muted-foreground">{progress.toFixed(0)}%</span>
             </div>
             <div className="h-2 rounded-full bg-background/50 overflow-hidden">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-all duration-300"
-                style={{ width: `${progress}%` }}
-              />
+              <div className="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-all duration-300" style={{ width: `${progress}%` }} />
             </div>
           </div>
 
-          {/* Stats row */}
           <div className="grid grid-cols-4 gap-2 mb-4">
             <StatBox label="Total" value={stats.total} />
             <StatBox label="Hits" value={stats.hits} color="text-primary" />
@@ -195,17 +175,18 @@ export default function HitRunner({ accessKey, analysis, cards }: HitRunnerProps
             <StatBox label="Avg Time" value={`${stats.avgTime.toFixed(1)}s`} />
           </div>
 
-          {/* Live log */}
-          <div
-            ref={logRef}
-            className="h-48 overflow-y-auto rounded-xl bg-background/60 border border-border/30 p-3 space-y-1 font-mono text-[11px]"
-          >
+          <div ref={logRef} className="h-48 overflow-y-auto rounded-xl bg-background/60 border border-border/30 p-3 space-y-1 font-mono text-[11px]">
             {results.map((r, i) => (
               <div key={i} className="flex items-center gap-2">
                 <span className="text-muted-foreground/50 w-8 shrink-0">{String(i + 1).padStart(3, "0")}</span>
                 {getStatusIcon(r.status)}
                 <span className="text-muted-foreground">{r.card}</span>
                 <span className={`font-bold uppercase ${getStatusColor(r.status)}`}>{r.status}</span>
+                {r.mode && (
+                  <span className={`text-[9px] px-1 rounded ${r.mode === 'bypasser' ? 'bg-accent/20 text-accent-foreground' : 'bg-primary/10 text-primary'}`}>
+                    {r.mode === 'bypasser' ? 'BYP' : 'HIT'}
+                  </span>
+                )}
                 <span className="text-muted-foreground/50 truncate">{r.code}</span>
                 <span className="text-muted-foreground/30 ml-auto shrink-0">{r.responseTime.toFixed(1)}s</span>
               </div>

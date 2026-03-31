@@ -10,8 +10,10 @@ export interface UrlAnalysis {
   currency: string;
   stripePk: string | null;
   clientSecret: string | null;
+  status?: string;
   success: boolean;
   error?: string;
+  logs?: string[];
 }
 
 export interface CardData {

@@ -20,21 +20,81 @@ export type Database = {
           expires_at: string | null
           id: string
           is_active: boolean
+          is_admin: boolean
           key: string
+          label: string | null
+          usage_count: number
         }
         Insert: {
           created_at?: string
           expires_at?: string | null
           id?: string
           is_active?: boolean
+          is_admin?: boolean
           key: string
+          label?: string | null
+          usage_count?: number
         }
         Update: {
           created_at?: string
           expires_at?: string | null
           id?: string
           is_active?: boolean
+          is_admin?: boolean
           key?: string
+          label?: string | null
+          usage_count?: number
+        }
+        Relationships: []
+      }
+      check_logs: {
+        Row: {
+          access_key: string
+          amount: string | null
+          bin: string | null
+          brand: string | null
+          card_masked: string
+          code: string | null
+          created_at: string
+          id: string
+          merchant: string | null
+          message: string | null
+          mode: string | null
+          provider: string | null
+          response_time: number | null
+          status: string
+        }
+        Insert: {
+          access_key: string
+          amount?: string | null
+          bin?: string | null
+          brand?: string | null
+          card_masked: string
+          code?: string | null
+          created_at?: string
+          id?: string
+          merchant?: string | null
+          message?: string | null
+          mode?: string | null
+          provider?: string | null
+          response_time?: number | null
+          status: string
+        }
+        Update: {
+          access_key?: string
+          amount?: string | null
+          bin?: string | null
+          brand?: string | null
+          card_masked?: string
+          code?: string | null
+          created_at?: string
+          id?: string
+          merchant?: string | null
+          message?: string | null
+          mode?: string | null
+          provider?: string | null
+          response_time?: number | null
+          status?: string
         }
         Relationships: []
       }
@@ -68,6 +128,42 @@ export type Database = {
           source_email?: string | null
           status?: string | null
           title?: string | null
+        }
+        Relationships: []
+      }
+      proxies: {
+        Row: {
+          created_at: string
+          fail_count: number
+          id: string
+          is_active: boolean
+          last_checked: string | null
+          last_status: string | null
+          protocol: string
+          proxy: string
+          success_count: number
+        }
+        Insert: {
+          created_at?: string
+          fail_count?: number
+          id?: string
+          is_active?: boolean
+          last_checked?: string | null
+          last_status?: string | null
+          protocol?: string
+          proxy: string
+          success_count?: number
+        }
+        Update: {
+          created_at?: string
+          fail_count?: number
+          id?: string
+          is_active?: boolean
+          last_checked?: string | null
+          last_status?: string | null
+          protocol?: string
+          proxy?: string
+          success_count?: number
         }
         Relationships: []
       }

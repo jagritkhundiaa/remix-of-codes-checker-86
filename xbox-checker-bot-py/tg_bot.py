@@ -16,7 +16,7 @@ import requests
 from typing import Dict, Any, Optional
 from datetime import datetime
 from auth_stripe_checker import check_card as auth_check_card, probe_site as auth_probe_site
-from auth2_checker import check_card as auth2_check_card, probe_site as auth2_probe_site
+from auth2_woo_checker import check_card as auth2_check_card, probe_site as auth2_probe_site, validate_site as auth2_validate_site
 from braintree_auth_checker import check_card as b3auth_check_card, probe_site as b3auth_probe_site
 from authnet_checker import check_card as authnet_check_card, probe_site as authnet_probe_site
 from br3_charge_checker import check_card as br3charge_check_card, probe_site as br3charge_probe_site

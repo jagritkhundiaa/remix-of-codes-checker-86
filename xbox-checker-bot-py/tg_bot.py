@@ -1060,7 +1060,7 @@ cancel_flags = {}
 # ============================================================
 GATE_REGISTRY = [
     ("auth", "/auth", "Stripe Auth", True),
-    ("auth2", "/auth2", "Authnet Auth", True),
+    ("auth2", "/auth2", "Auto Stripe v2", True),
     ("b3auth", "/b3auth", "Braintree Auth", True),
     ("b3charge", "/b3charge", "Braintree Charge", True),
     ("authnet", "/authnet", "Authorize.net", True),

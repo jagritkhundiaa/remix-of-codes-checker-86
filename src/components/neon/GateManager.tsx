@@ -19,6 +19,11 @@ export default function GateManager({ accessKey, onGateSelected, analysis }: Gat
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const getGateUrl = (gateId: string) => `${window.location.origin}/gate/${gateId}`;
+  const getApiUrl = (gateId: string) => {
+    const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID;
+    return `https://${projectId}.supabase.co/functions/v1/neon-gate-check`;
+  };
+  const [showApiInfo, setShowApiInfo] = useState<string | null>(null);
 
   useEffect(() => {
     loadGates();

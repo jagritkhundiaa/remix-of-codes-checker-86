@@ -16,6 +16,9 @@ export default function GateManager({ accessKey, onGateSelected, analysis }: Gat
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const getGateUrl = (gateId: string) => `${window.location.origin}/gate/${gateId}`;
 
   useEffect(() => {
     loadGates();

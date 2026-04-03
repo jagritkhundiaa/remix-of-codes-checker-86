@@ -236,17 +236,4 @@ export const PROVIDER_LABELS: Record<string, string> = {
   wix: 'Wix',
   ecwid: 'Ecwid',
   unknown: 'Unknown',
-};
-  paypal: 'PayPal',
-  braintree: 'Braintree',
-  adyen: 'Adyen',
-  square: 'Square',
-  mollie: 'Mollie',
-  klarna: 'Klarna',
-  authorizenet: 'Authorize.Net',
-  woocommerce: 'WooCommerce',
-  bigcommerce: 'BigCommerce',
-  wix: 'Wix',
-  ecwid: 'Ecwid',
-  unknown: 'Unknown',
-};
+;

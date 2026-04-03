@@ -239,69 +239,38 @@ async function fetchCodesFromXbox(uhs, xstsToken) {
     const codes = [];
     const links = [];
 
-    // Headers matching Xbox Game Pass app
-    const baseHeaders = {
-      Authorization: auth,
-      "Content-Type": "application/json",
-      "User-Agent": "XboxGamePassDesktop/2502.1001.30.0",
-      "Accept": "application/json",
-      "Accept-Language": "en-US",
-      "x-xbl-contract-version": "2",
-    };
+    const res = await proxiedFetch("https://profile.gamepass.com/v2/offers", {
+      headers: {
+        Authorization: auth,
+        "Content-Type": "application/json",
+        "User-Agent": "okhttp/4.12.0",
+      },
+    });
 
-    // Try v3 first, then v2
-    let data = null;
-    for (const version of ["v3", "v2"]) {
-      try {
-        const res = await proxiedFetch(`https://profile.gamepass.com/${version}/offers`, {
-          headers: baseHeaders,
-        });
-        if (res.status === 200) {
-          data = await res.json();
-          break;
-        }
-      } catch {}
-    }
-
-    if (!data) return { codes, links };
-
-    // Handle both response formats: data.offers (v2) or data directly as array (v3)
-    const offers = data.offers || data.perks || data.results || (Array.isArray(data) ? data : []);
+    if (res.status !== 200) return { codes, links };
+    const data = await res.json();
+    const offers = data.offers || [];
 
     for (const offer of offers) {
-      // Extract resource from multiple possible fields
-      const resource = offer.resource || offer.code || offer.redeemUrl || offer.claimUrl || offer.benefitUrl || offer.url || null;
-
-      if (resource) {
-        if (isLink(resource)) {
-          links.push(resource);
+      if (offer.resource) {
+        if (isLink(offer.resource)) {
+          links.push(offer.resource);
         } else {
-          codes.push(resource);
+          codes.push(offer.resource);
         }
-        continue;
-      }
-
-      // If no resource yet, try claiming — check multiple status fields
-      const status = offer.offerStatus || offer.status || offer.state || "";
-      const canClaim = ["available", "unclaimed", "ready", "Active"].some(
-        s => status.toLowerCase() === s.toLowerCase()
-      );
-
-      if (!canClaim) continue;
-
-      const offerId = offer.offerId || offer.id || offer.perkId || offer.offerProductId;
-      if (!offerId) continue;
-
-      // Try claiming on both v3 and v2
-      for (const version of ["v3", "v2"]) {
+      } else if (offer.offerStatus === "available") {
+        // Claim the perk
+        const cv = generateMsCv();
         try {
           const claimRes = await proxiedFetch(
-            `https://profile.gamepass.com/${version}/offers/${offerId}`,
+            `https://profile.gamepass.com/v2/offers/${offer.offerId}`,
             {
               method: "POST",
               headers: {
-                ...baseHeaders,
-                "ms-cv": generateMsCv(),
+                Authorization: auth,
+                "Content-Type": "application/json",
+                "User-Agent": "okhttp/4.12.0",
+                "ms-cv": cv,
                 "Content-Length": "0",
               },
               body: "",
@@ -309,15 +278,12 @@ async function fetchCodesFromXbox(uhs, xstsToken) {
           );
           if (claimRes.status === 200) {
             const claimData = await claimRes.json();
-            const claimedResource = claimData.resource || claimData.code || claimData.redeemUrl
-              || claimData.claimUrl || claimData.benefitUrl || claimData.url || null;
-            if (claimedResource) {
-              if (isLink(claimedResource)) {
-                links.push(claimedResource);
+            if (claimData.resource) {
+              if (isLink(claimData.resource)) {
+                links.push(claimData.resource);
               } else {
-                codes.push(claimedResource);
+                codes.push(claimData.resource);
               }
-              break; // Claimed successfully, don't try other version
             }
           }
         } catch {}

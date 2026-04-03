@@ -237,7 +237,6 @@ export const PROVIDER_LABELS: Record<string, string> = {
   ecwid: 'Ecwid',
   unknown: 'Unknown',
 };
-  shopify: 'Shopify',
   paypal: 'PayPal',
   braintree: 'Braintree',
   adyen: 'Adyen',

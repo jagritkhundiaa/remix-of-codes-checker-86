@@ -79,6 +79,7 @@ export default function Index() {
         <UrlAnalyzer accessKey={accessKey} onAnalyzed={setAnalysis} analysis={analysis} />
         <CardInput cards={cards} onCardsChange={setCards} />
         <HitRunner accessKey={accessKey} analysis={analysis} cards={cards} settings={settings} />
+        <SiteScraper accessKey={accessKey} />
       </main>
 
       <Settings settings={settings} onSettingsChange={setSettings} />

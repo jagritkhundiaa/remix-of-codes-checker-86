@@ -190,14 +190,14 @@ export default function SiteScraper({ accessKey }: { accessKey: string }) {
       </div>
 
       {/* Filter */}
-      <div className="flex gap-1.5">
-        {["all", "stripe", "adyen", "confirmed", "pending"].map(f => (
+      <div className="flex gap-1.5 flex-wrap">
+        {["all", "stripe", "adyen", "2d", "3d", "confirmed", "pending"].map(f => (
           <button
             key={f}
             onClick={() => setFilter(f)}
             className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${filter === f ? "bg-primary text-primary-foreground" : "bg-background/40 text-muted-foreground hover:text-foreground"}`}
           >
-            {f.charAt(0).toUpperCase() + f.slice(1)}
+            {f === '2d' ? '2D Gates' : f === '3d' ? '3D Gates' : f.charAt(0).toUpperCase() + f.slice(1)}
           </button>
         ))}
       </div>

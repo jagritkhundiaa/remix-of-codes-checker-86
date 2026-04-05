@@ -355,6 +355,7 @@ Deno.serve(async (req) => {
 
       console.log(`[Scraper] Searching category: ${cat.name}`);
       const urls = await discoverSites(cat.name, cat.search_queries, apiKey);
+      console.log(`[Scraper] ${cat.name}: discovered ${urls.length} URLs`);
       results.discovered += urls.length;
 
       for (const url of urls) {
@@ -364,7 +365,10 @@ Deno.serve(async (req) => {
           .eq('url', url)
           .maybeSingle();
 
-        if (existing) continue;
+        if (existing) {
+          console.log(`[Scraper] Skipping existing: ${url}`);
+          continue;
+        }
 
         const analysis = await analyzeSite(url);
         results.analyzed++;

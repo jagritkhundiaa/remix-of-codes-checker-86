@@ -1094,6 +1094,7 @@ CHKAPI_CMDS = {
     "/chkapiauthnet": "authnet",
     "/chkapiautostripe": "autostripe",
     "/chkapishopifygql": "shopifygql",
+    "/chkapictxt": "ctxt",
 }
 
 

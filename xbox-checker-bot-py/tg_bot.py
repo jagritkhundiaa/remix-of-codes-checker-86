@@ -1072,6 +1072,7 @@ GATE_REGISTRY = [
     ("authnet", "/authnet", "Authorize.net", True),
     ("autostripe", "/autostripe", "Auto Stripe", True),
     ("shopifygql", "/shopifygql", "Shopify GQL", True),
+    ("ctxt", "/ctxt", "Adyen Donate", True),
 ]
 
 GATE_MAP = {

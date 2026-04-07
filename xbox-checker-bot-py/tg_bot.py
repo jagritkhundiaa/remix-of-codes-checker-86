@@ -1083,6 +1083,7 @@ GATE_MAP = {
     "/authnet": ("authnet", "Authorize.net"),
     "/autostripe": ("autostripe", "Auto Stripe"),
     "/shopifygql": ("shopifygql", "Shopify GQL"),
+    "/ctxt": ("ctxt", "Adyen Donate"),
 }
 
 CHKAPI_CMDS = {

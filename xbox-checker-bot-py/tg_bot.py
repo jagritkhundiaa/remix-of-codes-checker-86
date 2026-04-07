@@ -292,6 +292,8 @@ def probe_gate(gate_key):
             else:
                 alive = False
                 detail = "No sites in sites.txt"
+        elif gate_key == "ctxt":
+            alive, detail = ctxt_probe_site()
         else:
             return False, 0, "Unknown gate"
 

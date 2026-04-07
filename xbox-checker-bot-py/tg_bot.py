@@ -260,6 +260,7 @@ GATE_PROBE_MAP = {
     "authnet": {"name": "Authorize.net", "cmd": "/chkapiauthnet"},
     "autostripe": {"name": "Auto Stripe", "cmd": "/chkapiautostripe"},
     "shopifygql": {"name": "Shopify GQL", "cmd": "/chkapishopifygql"},
+    "ctxt": {"name": "Adyen Donate", "cmd": "/chkapictxt"},
 }
 
 

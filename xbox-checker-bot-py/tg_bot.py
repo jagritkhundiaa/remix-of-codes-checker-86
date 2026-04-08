@@ -261,31 +261,17 @@ def probe_gate(gate_key):
     try:
         if gate_key == "auth":
             alive, detail = auth_probe_site()
-        elif gate_key == "auth2":
-            sites = load_auth2_sites()
+        elif gate_key == "chr1":
+            alive, detail = chr1_probe_site()
+        elif gate_key == "b3":
+            alive, detail = b3_probe_site()
+        elif gate_key == "rpay":
+            sites = load_rpay_sites()
             if sites:
-                alive, detail = auth2_probe_site(sites[0])
+                alive, detail = rpay_probe_site(sites[0])
             else:
                 alive = False
-                detail = "No sites — add with /auth2site"
-        elif gate_key == "b3auth":
-            alive, detail = b3auth_probe_site()
-        elif gate_key == "b3charge":
-            alive, detail = br3charge_probe_site()
-        elif gate_key == "authnet":
-            alive, detail = authnet_probe_site()
-        elif gate_key == "autostripe":
-            alive, detail = autostripe_probe_site()
-        elif gate_key == "shopifygql":
-            sites = load_shopify_sites()
-            if sites:
-                alive = True
-                detail = f"{len(sites)} sites loaded"
-            else:
-                alive = False
-                detail = "No sites in sites.txt"
-        elif gate_key == "ctxt":
-            alive, detail = ctxt_probe_site()
+                detail = "No sites — add with /rpaysite"
         else:
             return False, 0, "Unknown gate"
 

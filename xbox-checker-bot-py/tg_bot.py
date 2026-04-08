@@ -674,34 +674,29 @@ def load_shopify_sites():
 
 
 # ============================================================
-#  Auth2 sites loader + round-robin
+#  RPay sites loader + round-robin (for /rpay gate)
 # ============================================================
-_auth2_site_index = 0
-_auth2_site_lock = threading.Lock()
+_rpay_site_index = 0
+_rpay_site_lock = threading.Lock()
 
 
-def load_auth2_sites():
-    if not os.path.exists(AUTH2_SITES_FILE):
-        return []
-    with open(AUTH2_SITES_FILE, 'r') as f:
-        return [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
+def _load_rpay_sites():
+    return load_rpay_sites()
 
 
-def save_auth2_sites(sites):
-    with open(AUTH2_SITES_FILE, 'w') as f:
-        for s in sites:
-            f.write(s + '\n')
+def _save_rpay_sites(sites):
+    save_rpay_sites(sites)
 
 
-def get_next_auth2_site():
-    """Round-robin site selection for auth2 gate."""
-    global _auth2_site_index
-    sites = load_auth2_sites()
+def get_next_rpay_site():
+    """Round-robin site selection for rpay gate."""
+    global _rpay_site_index
+    sites = load_rpay_sites()
     if not sites:
         return None
-    with _auth2_site_lock:
-        site = sites[_auth2_site_index % len(sites)]
-        _auth2_site_index += 1
+    with _rpay_site_lock:
+        site = sites[_rpay_site_index % len(sites)]
+        _rpay_site_index += 1
     return site
 
 

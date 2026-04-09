@@ -527,7 +527,9 @@ def format_proxy(proxy_str):
             user, pwd, ip, port = parts
             url = f"{proto}://{user}:{pwd}@{ip}:{port}"
             return {"http": url, "https": url}
-    return None
+    # Fallback: try as-is with proto
+    url = f"{proto}://{proxy_str}"
+    return {"http": url, "https": url}
 
 
 def _is_valid_port(port_str):

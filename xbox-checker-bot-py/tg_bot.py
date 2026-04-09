@@ -1674,10 +1674,6 @@ def handle_update(update):
                 f"...and more\n\n<i>{DEVELOPER}</i>")
             return
 
-        send_message(chat_id,
-            f"<b>Validating {len(new_proxies_raw)} proxy(ies)...</b>\n"
-            "Testing connectivity for each one.")
-
         def _do_add_proxies():
             global _global_proxies
             valid = []
@@ -1685,24 +1681,22 @@ def handle_update(update):
             results_lines = []
 
             for raw in new_proxies_raw:
-                # Format validation
+                # Format validation only — skip connectivity test
                 validated = validate_proxy_format(raw)
                 if not validated:
-                    invalid.append(raw)
-                    masked = raw[:25] + "..." if len(raw) > 25 else raw
-                    results_lines.append(f"<code>{masked}</code> — <code>Invalid format</code>")
-                    continue
-
-                # Connectivity test
-                alive, latency, error = test_proxy_connectivity(raw)
-                masked = raw[:25] + "..." if len(raw) > 25 else raw
-                if alive:
-                    valid.append(raw)
-                    results_lines.append(f"✅ <code>{masked}</code> — <code>{latency}ms</code>")
+                    # Fallback: if it looks like a proxy (has host:port pattern), accept it anyway
+                    if ':' in raw and len(raw) > 5:
+                        valid.append(raw)
+                        masked = raw[:25] + "..." if len(raw) > 25 else raw
+                        results_lines.append(f"✅ <code>{masked}</code> — Added (raw)")
+                    else:
+                        invalid.append(raw)
+                        masked = raw[:25] + "..." if len(raw) > 25 else raw
+                        results_lines.append(f"❌ <code>{masked}</code> — Invalid format")
                 else:
-                    # Do NOT add dead proxies
-                    invalid.append(raw)
-                    results_lines.append(f"❌ <code>{masked}</code> — <code>{error}</code>")
+                    valid.append(raw)
+                    masked = raw[:25] + "..." if len(raw) > 25 else raw
+                    results_lines.append(f"✅ <code>{masked}</code> — Added")
 
             # Append valid proxies to file and pool
             if valid:
@@ -1712,15 +1706,11 @@ def handle_update(update):
                 with _proxy_lock:
                     _global_proxies.extend(valid)
 
-            dead_count = sum(1 for r in results_lines if "❌" in r)
-
             send_message(chat_id,
                 f"<b>Proxy Add Results</b>\n\n"
                 f"Submitted: <code>{len(new_proxies_raw)}</code>\n"
-                f"✅ Working: <code>{len(valid)}</code>\n"
-                f"❌ Dead: <code>{dead_count}</code>\n"
-                f"⚠️ Invalid: <code>{len(invalid) - dead_count}</code>\n"
-                f"Added to pool: <code>{len(valid)}</code>\n"
+                f"✅ Added: <code>{len(valid)}</code>\n"
+                f"❌ Invalid: <code>{len(invalid)}</code>\n"
                 f"Total pool: <code>{len(_global_proxies)}</code>\n\n"
                 + "\n".join(results_lines[:20]) +
                 (f"\n... and {len(results_lines) - 20} more" if len(results_lines) > 20 else "") +

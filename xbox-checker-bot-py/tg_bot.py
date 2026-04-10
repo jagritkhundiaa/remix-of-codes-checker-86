@@ -709,6 +709,22 @@ def get_next_rpay_site():
     return site
 
 
+_shopify_site_index = 0
+_shopify_site_lock = threading.Lock()
+
+
+def get_next_shopify_site():
+    """Round-robin site selection for shopify gate."""
+    global _shopify_site_index
+    sites = load_shopify_sites()
+    if not sites:
+        return None
+    with _shopify_site_lock:
+        site = sites[_shopify_site_index % len(sites)]
+        _shopify_site_index += 1
+    return site
+
+
 # ============================================================
 #  Gate runner
 # ============================================================

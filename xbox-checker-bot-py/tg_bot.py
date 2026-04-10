@@ -2846,7 +2846,160 @@ def handle_update(update):
         threading.Thread(target=_do_validate_rpay, daemon=True).start()
         return
 
-    # --- /authsite (admin — set /auth gate site URL) ---
+    # --- /shopifysite (manage Shopify sites for /shopify) ---
+    if text.startswith("/shopifysite"):
+        if not is_admin(user_id):
+            sites = load_shopify_sites()
+            send_message(chat_id,
+                f"<b>Shopify Sites</b>\n\n"
+                f"Loaded: <code>{len(sites)}</code> site(s)\n\n"
+                f"<i>{DEVELOPER}</i>")
+            return
+
+        parts = text.split(maxsplit=1)
+        new_sites_raw = []
+
+        reply = msg.get("reply_to_message")
+        if reply and reply.get("document"):
+            doc = reply["document"]
+            fname = doc.get("file_name", "")
+            if fname.lower().endswith(".txt"):
+                content = download_file(doc["file_id"])
+                if content:
+                    new_sites_raw = [l.strip() for l in content.splitlines()
+                                     if l.strip() and not l.strip().startswith('#')]
+
+        if len(parts) >= 2:
+            sub = parts[1].strip()
+
+            if sub.lower() == "list":
+                sites = load_shopify_sites()
+                if not sites:
+                    send_message(chat_id,
+                        "<b>Shopify Sites — Empty</b>\n\n"
+                        "No sites added yet.\n"
+                        "Use <code>/shopifysite URL</code> to add.\n\n"
+                        f"<i>{DEVELOPER}</i>")
+                else:
+                    lines_out = []
+                    for i, s in enumerate(sites[:30], 1):
+                        masked = s[:40] + "..." if len(s) > 40 else s
+                        lines_out.append(f"  {i}. <code>{masked}</code>")
+                    extra = f"\n... and {len(sites) - 30} more" if len(sites) > 30 else ""
+                    send_message(chat_id,
+                        f"<b>Shopify Sites ({len(sites)})</b>\n\n"
+                        + "\n".join(lines_out) + extra +
+                        f"\n\n<i>{DEVELOPER}</i>")
+                return
+
+            if sub.lower() == "clear":
+                save_shopify_sites([])
+                send_message(chat_id,
+                    "<b>Shopify Sites Cleared</b>\n\n"
+                    f"All sites removed.\n\n<i>{DEVELOPER}</i>")
+                return
+
+            if sub.lower().startswith("remove "):
+                remove_url = sub[7:].strip()
+                sites = load_shopify_sites()
+                new_sites = [s for s in sites if s.lower() != remove_url.lower()
+                             and s.lower().replace('https://', '').replace('http://', '').rstrip('/')
+                             != remove_url.lower().replace('https://', '').replace('http://', '').rstrip('/')]
+                removed = len(sites) - len(new_sites)
+                save_shopify_sites(new_sites)
+                send_message(chat_id,
+                    f"<b>Removed {removed} site(s)</b>\n\n"
+                    f"Remaining: <code>{len(new_sites)}</code>\n\n"
+                    f"<i>{DEVELOPER}</i>")
+                return
+
+            inline_sites = [l.strip() for l in sub.splitlines() if l.strip() and not l.strip().startswith('#')]
+            expanded = []
+            for s in inline_sites:
+                if ',' in s:
+                    expanded.extend([x.strip() for x in s.split(',') if x.strip()])
+                else:
+                    expanded.append(s)
+            new_sites_raw.extend(expanded)
+
+        if not new_sites_raw:
+            sites = load_shopify_sites()
+            send_message(chat_id,
+                "<b>Shopify Site Management</b>\n\n"
+                f"Current sites: <code>{len(sites)}</code>\n\n"
+                "<b>Add sites:</b>\n"
+                "<code>/shopifysite https://store.com</code>\n\n"
+                "<b>Multiple sites:</b>\n"
+                "<code>/shopifysite\n"
+                "https://store1.com\n"
+                "https://store2.com</code>\n\n"
+                "<b>From file:</b>\n"
+                "Reply to a .txt file with <code>/shopifysite</code>\n\n"
+                "<b>Other commands:</b>\n"
+                "<code>/shopifysite list</code>  ·  List all sites\n"
+                "<code>/shopifysite clear</code>  ·  Remove all\n"
+                "<code>/shopifysite remove URL</code>  ·  Remove one\n\n"
+                f"<i>{DEVELOPER}</i>")
+            return
+
+        send_message(chat_id,
+            f"<b>Validating {len(new_sites_raw)} site(s)...</b>\n"
+            "Checking Shopify compatibility...")
+
+        def _do_validate_shopify():
+            existing = load_shopify_sites()
+            existing_normalized = set(
+                s.lower().replace('https://', '').replace('http://', '').rstrip('/')
+                for s in existing
+            )
+            valid = []
+            invalid = []
+            duplicate = []
+            results_lines = []
+
+            for raw_site in new_sites_raw:
+                site_url = raw_site.strip()
+                if not site_url.startswith(('http://', 'https://')):
+                    site_url = 'https://' + site_url
+                site_url = site_url.rstrip('/')
+
+                normalized = site_url.lower().replace('https://', '').replace('http://', '').rstrip('/')
+
+                if normalized in existing_normalized:
+                    duplicate.append(site_url)
+                    masked = site_url[:40] + "..." if len(site_url) > 40 else site_url
+                    results_lines.append(f"⚠️ <code>{masked}</code> — Already added")
+                    continue
+
+                is_valid, detail = shopify_validate_site(site_url)
+                masked = site_url[:40] + "..." if len(site_url) > 40 else site_url
+
+                if is_valid:
+                    valid.append(site_url)
+                    existing_normalized.add(normalized)
+                    results_lines.append(f"✅ <code>{masked}</code> — Valid Shopify")
+                else:
+                    invalid.append(site_url)
+                    results_lines.append(f"❌ <code>{masked}</code> — {detail}")
+
+            if valid:
+                existing.extend(valid)
+                save_shopify_sites(existing)
+
+            send_message(chat_id,
+                f"<b>Shopify Site Results</b>\n\n"
+                f"Submitted: <code>{len(new_sites_raw)}</code>\n"
+                f"✅ Added: <code>{len(valid)}</code>\n"
+                f"❌ Invalid: <code>{len(invalid)}</code>\n"
+                f"⚠️ Duplicate: <code>{len(duplicate)}</code>\n"
+                f"Total sites: <code>{len(existing)}</code>\n\n"
+                + "\n".join(results_lines[:20]) +
+                (f"\n... and {len(results_lines) - 20} more" if len(results_lines) > 20 else "") +
+                f"\n\n<i>{DEVELOPER}</i>")
+
+        threading.Thread(target=_do_validate_shopify, daemon=True).start()
+        return
+
     if text.startswith("/authsite"):
         if not is_admin(user_id):
             return

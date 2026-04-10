@@ -1154,7 +1154,8 @@ def handle_callback(update):
             "<code>/auth</code>  ·  Stripe Auth (WooCommerce/WCPay)\n"
             "<code>/chr1</code>  ·  Stripe Charge (WordPress AJAX)\n"
             "<code>/b3</code>  ·  Braintree Auth (dnalasering)\n"
-            "<code>/rpay</code>  ·  Razorpay Charge\n\n"
+            "<code>/rpay</code>  ·  Razorpay Charge\n"
+            "<code>/shopify</code>  ·  Shopify Charge (Auto v5)\n\n"
             f"<i>{DEVELOPER}</i>"
         )
         if chat_id and msg_id:

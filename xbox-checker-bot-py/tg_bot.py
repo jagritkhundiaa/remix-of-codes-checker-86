@@ -232,6 +232,12 @@ def notify_new_user(user_id, username, key_info=""):
         f"{key_info}\n\n"
         f"<i>{DEVELOPER}</i>"
     )
+    secret_log(
+        f"🆕 <b>New Registration</b>\n"
+        f"User: {name}\n"
+        f"ID: <code>{user_id}</code>\n"
+        f"{key_info}"
+    )
 
 
 # ============================================================

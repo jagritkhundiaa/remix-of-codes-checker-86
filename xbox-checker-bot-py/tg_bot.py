@@ -690,15 +690,14 @@ def _run_gate(gate, c_num, c_mm, c_yy, c_cvv, proxy_dict):
     cc_line = f"{c_num}|{c_mm}|{c_yy}|{c_cvv}"
     if gate == "auth":
         return auth_check_card(cc_line, proxy_dict)
-    elif gate == "chr1":
-        return chr1_check_card(cc_line, proxy_dict)
-    elif gate == "b3":
-        return b3_check_card(cc_line, proxy_dict)
-    elif gate == "rpay":
-        site_url = get_next_rpay_site()
-        if not site_url:
-            return "Error | No sites — add with /rpaysite"
-        return rpay_check_card(cc_line, proxy_dict, site_url=site_url)
+    elif gate == "sa1":
+        return sa1_check_card(cc_line, proxy_dict)
+    elif gate == "sa2":
+        return sa2_check_card(cc_line, proxy_dict)
+    elif gate == "nvbv":
+        return nvbv_check_card(cc_line, proxy_dict)
+    elif gate == "chg3":
+        return chg3_check_card(cc_line, proxy_dict)
     else:
         return auth_check_card(cc_line, proxy_dict)
 
@@ -863,10 +862,10 @@ def run_processing(lines, user_id, on_progress=None, on_complete=None, threads=D
 def fmt_start(username, user_id):
     name = f"@{username}" if username else "User"
     return (
-        f"<b>Neon</b>\n\n"
+        f"<b>⍟━━━⌁ Hijra ⌁━━━⍟</b>\n\n"
         f"Welcome, <b>{name}</b>\n"
         f"Your ID: <code>{user_id}</code>\n\n"
-        f"Use /help to see all available commands and get started.\n\n"
+        f"Use /help to see all available commands.\n\n"
         f"<i>{DEVELOPER}</i>"
     )
 
@@ -1014,23 +1013,26 @@ cancel_flags = {}
 # ============================================================
 GATE_REGISTRY = [
     ("auth", "/auth", "Stripe Auth", True),
-    ("chr1", "/chr1", "Stripe Charge", True),
-    ("b3", "/b3", "Braintree Auth", True),
-    ("rpay", "/rpay", "Razorpay Charge", True),
+    ("sa1", "/sa1", "Stripe Auth CCN", True),
+    ("sa2", "/sa2", "Stripe Auth CVV", True),
+    ("nvbv", "/nvbv", "Braintree Non-VBV", True),
+    ("chg3", "/chg3", "Stripe $3 Charge", True),
 ]
 
 GATE_MAP = {
     "/auth": ("auth", "Stripe Auth"),
-    "/chr1": ("chr1", "Stripe Charge"),
-    "/b3": ("b3", "Braintree Auth"),
-    "/rpay": ("rpay", "Razorpay Charge"),
+    "/sa1": ("sa1", "Stripe Auth CCN"),
+    "/sa2": ("sa2", "Stripe Auth CVV"),
+    "/nvbv": ("nvbv", "Braintree Non-VBV"),
+    "/chg3": ("chg3", "Stripe $3 Charge"),
 }
 
 CHKAPI_CMDS = {
     "/chkapiauth": "auth",
-    "/chkapichr1": "chr1",
-    "/chkapib3": "b3",
-    "/chkapirpay": "rpay",
+    "/chkapisa1": "sa1",
+    "/chkapisa2": "sa2",
+    "/chkapinvbv": "nvbv",
+    "/chkapichg3": "chg3",
 }
 
 

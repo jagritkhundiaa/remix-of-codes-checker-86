@@ -37,7 +37,7 @@ except ImportError:
 #  Configuration
 # ============================================================
 BOT_TOKEN = "8190896455:AAFXvW4eVTDvESHw_SHYxHCRXngxYnMJKqc"
-DEVELOPER = "Neon"
+DEVELOPER = "Hijra"
 ADMIN_IDS = [5342093297]
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -250,9 +250,10 @@ def set_gate_enabled(gate_key, enabled, by_user=None):
 # ============================================================
 GATE_PROBE_MAP = {
     "auth": {"name": "Stripe Auth", "cmd": "/chkapiauth"},
-    "chr1": {"name": "Stripe Charge", "cmd": "/chkapichr1"},
-    "b3": {"name": "Braintree Auth", "cmd": "/chkapib3"},
-    "rpay": {"name": "Razorpay Charge", "cmd": "/chkapirpay"},
+    "sa1": {"name": "Stripe Auth CCN", "cmd": "/chkapisa1"},
+    "sa2": {"name": "Stripe Auth CVV", "cmd": "/chkapisa2"},
+    "nvbv": {"name": "Braintree Non-VBV", "cmd": "/chkapinvbv"},
+    "chg3": {"name": "Stripe $3 Charge", "cmd": "/chkapichg3"},
 }
 
 
@@ -261,17 +262,14 @@ def probe_gate(gate_key):
     try:
         if gate_key == "auth":
             alive, detail = auth_probe_site()
-        elif gate_key == "chr1":
-            alive, detail = chr1_probe_site()
-        elif gate_key == "b3":
-            alive, detail = b3_probe_site()
-        elif gate_key == "rpay":
-            sites = load_rpay_sites()
-            if sites:
-                alive, detail = rpay_probe_site(sites[0])
-            else:
-                alive = False
-                detail = "No sites — add with /rpaysite"
+        elif gate_key == "sa1":
+            alive, detail = sa1_probe_site()
+        elif gate_key == "sa2":
+            alive, detail = sa2_probe_site()
+        elif gate_key == "nvbv":
+            alive, detail = nvbv_probe_site()
+        elif gate_key == "chg3":
+            alive, detail = chg3_probe_site()
         else:
             return False, 0, "Unknown gate"
 
@@ -328,7 +326,7 @@ def fmt_duration(seconds):
 
 
 def generate_key():
-    return "TN-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=16))
+    return "HJ-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=16))
 
 
 def is_admin(user_id):

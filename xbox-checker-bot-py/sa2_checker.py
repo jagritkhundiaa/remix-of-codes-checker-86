@@ -9,10 +9,10 @@ import string
 import secrets
 import uuid
 import time
-import re
 from datetime import datetime
-from typing import Optional, Dict
-from urllib.parse import parse_qsl, urlencode
+from typing import Optional
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 try:
     from faker import Faker
@@ -25,7 +25,7 @@ except ImportError:
     UserAgent = None
 
 
-def _gstr(src, a, b):
+def gstr(src, a, b):
     try:
         return src.split(a, 1)[1].split(b, 1)[0]
     except Exception:
@@ -40,6 +40,8 @@ _EMAILS = [
     'tutanota.de','mailbox.org','zoho.com','zohomail.com','fastmail.com',
     'pm.me','yandex.com','yandex.ru','mail.ru','gmx.com','gmx.de',
     'web.de','seznam.cz','laposte.net','orange.fr','byom.de','byom.my.id',
+    'edumail.vn','student.mail','alumni.email','icousd.com','ymail.cc',
+    'momoi.re','mailgun.co','inboxkitten.com','maildrop.cc',
 ]
 
 

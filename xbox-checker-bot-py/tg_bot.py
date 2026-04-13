@@ -1185,6 +1185,7 @@ def handle_callback(update):
             "<b>Commands</b>\n\n"
             "<code>/bin 424242</code>  ·  Set BIN filter\n"
             "<code>/clearbin</code>  ·  Clear BIN filter\n"
+            "<code>/kill CC|MM|YY|CVV</code>  ·  CC Killer\n"
             "<code>/cancel</code>  ·  Stop active task\n"
             "<code>/gates</code>  ·  List all gates + hit rates\n"
             "<code>/stats</code>  ·  Your lifetime stats\n"

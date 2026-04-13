@@ -184,6 +184,34 @@ def set_notification_gc(chat_id):
 
 
 # ============================================================
+#  RPay sites helpers
+# ============================================================
+def load_rpay_sites():
+    if not os.path.exists(RPAY_SITES_FILE):
+        return []
+    with open(RPAY_SITES_FILE, 'r') as f:
+        return [l.strip() for l in f if l.strip() and not l.strip().startswith('#')]
+
+
+def save_rpay_sites(sites):
+    with open(RPAY_SITES_FILE, 'w') as f:
+        for s in sites:
+            f.write(s + '\n')
+
+
+def rpay_validate_site(url):
+    try:
+        r = requests.get(url, timeout=15, allow_redirects=True)
+        if r.status_code < 400:
+            if 'razorpay' in r.text.lower():
+                return True, "Razorpay detected"
+            return True, "Site reachable (no Razorpay detected)"
+        return False, f"HTTP {r.status_code}"
+    except Exception as e:
+        return False, str(e)[:60]
+
+
+# ============================================================
 #  Notification sender
 # ============================================================
 def notify_gc(text):

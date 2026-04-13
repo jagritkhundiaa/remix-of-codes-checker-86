@@ -2856,42 +2856,7 @@ def handle_update(update):
             f"<i>{DEVELOPER}</i>")
         return
 
-    # --- /chr1config (admin — configure /chr1 gate) ---
-    if text.startswith("/chr1config"):
-        if not is_admin(user_id):
-            return
-        parts = text.split(maxsplit=1)
-        if len(parts) < 2:
-            cfg = chr1_get_config()
-            send_message(chat_id,
-                "<b>CHR1 Gate Config</b>\n\n"
-                f"Site: <code>{cfg.get('site_url', 'N/A')}</code>\n"
-                f"Stripe PK: <code>{cfg.get('stripe_pk', 'N/A')[:30]}...</code>\n"
-                f"Amount: <code>{cfg.get('amount', '5.00')}</code>\n\n"
-                "<b>Update:</b>\n"
-                "<code>/chr1config site https://newsite.com</code>\n"
-                "<code>/chr1config pk pk_live_xxx</code>\n"
-                "<code>/chr1config token HCAPTCHA_TOKEN</code>\n"
-                "<code>/chr1config amount 10.00</code>\n\n"
-                f"<i>{DEVELOPER}</i>")
-            return
-        sub = parts[1].strip()
-        sub_parts = sub.split(maxsplit=1)
-        if len(sub_parts) < 2:
-            send_message(chat_id, f"<b>Usage:</b> <code>/chr1config site|pk|token|amount VALUE</code>\n\n<i>{DEVELOPER}</i>")
-            return
-        key_name, value = sub_parts[0].lower(), sub_parts[1].strip()
-        key_map = {"site": "site_url", "pk": "stripe_pk", "token": "hcaptcha_token", "amount": "amount"}
-        if key_name not in key_map:
-            send_message(chat_id, f"<b>Unknown key.</b> Use: site, pk, token, amount\n\n<i>{DEVELOPER}</i>")
-            return
-        chr1_update_config(key_map[key_name], value)
-        send_message(chat_id,
-            f"<b>CHR1 Config Updated</b>\n\n"
-            f"Key: <code>{key_name}</code>\n"
-            f"Value: <code>{value[:40]}{'...' if len(value) > 40 else ''}</code>\n\n"
-            f"<i>{DEVELOPER}</i>")
-        return
+    # --- /chr1config removed (legacy gate) ---
 
     # --- Gate commands ---
     cmd_base = text.split()[0] if text else ""

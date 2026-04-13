@@ -763,8 +763,8 @@ def process_single_entry(entry, proxies_list, user_id, gate="auth"):
             def _is_conn_error(r):
                 return isinstance(r, str) and any(e in r for e in _CONN_ERRORS)
 
-            # Try up to 5 proxies with rotation before giving up
-            max_proxy_tries = min(5, len(proxies_list)) if proxies_list else 0
+            # Try up to 3 proxies with fast rotation
+            max_proxy_tries = min(3, len(proxies_list)) if proxies_list else 0
             proxy_candidates = _get_rotating_proxy(proxies_list, max_tries=max_proxy_tries) if proxies_list else [None]
             result = None
 
@@ -775,11 +775,10 @@ def process_single_entry(entry, proxies_list, user_id, gate="auth"):
                     result = _run_gate(gate, c_num, c_mm, c_yy, c_cvv, proxy_dict)
                     if not _is_conn_error(result):
                         break
-                    # Small backoff before next proxy
-                    time.sleep(random.uniform(0.3, 0.7))
+                    time.sleep(random.uniform(0.1, 0.3))
                 except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError,
                         requests.exceptions.Timeout, ConnectionError, OSError):
-                    time.sleep(random.uniform(0.2, 0.5))
+                    time.sleep(random.uniform(0.1, 0.3))
                     continue
                 except Exception as e:
                     result = f"Error: {str(e)}"
@@ -810,7 +809,7 @@ def process_single_entry(entry, proxies_list, user_id, gate="auth"):
 # ============================================================
 #  Processing runner
 # ============================================================
-DEFAULT_THREADS = 10
+DEFAULT_THREADS = 25
 
 
 def run_processing(lines, user_id, on_progress=None, on_complete=None, threads=DEFAULT_THREADS, gate="auth"):
@@ -842,7 +841,7 @@ def run_processing(lines, user_id, on_progress=None, on_complete=None, threads=D
         detail = result.split(" | ", 1)[1] if " | " in result else result
         return (entry, status, detail, category)
 
-    max_workers = max(1, min(threads, total, 20))
+    max_workers = max(1, min(threads, total, 30))
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(worker, line): i for i, line in enumerate(lines)}

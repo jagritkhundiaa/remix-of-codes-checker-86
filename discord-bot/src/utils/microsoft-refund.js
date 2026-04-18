@@ -12,7 +12,11 @@ const REFUND_WINDOW_DAYS = 14;
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 2000;
 
-// Same OAuth URL used by the puller for Outlook scope (gives us PIFD access)
+// Use the SAME OAuth client that the puller's store login uses — we already
+// know it works end-to-end. After login we don't need a special PIFD scope:
+// we go through `acquire-onbehalf-of-token` like the purchaser does and call
+// the order APIs with `MSAuth1.0 t=...` which is the modern flow Microsoft
+// accepts (the legacy MSADELEGATE1.0/PIFD flow has been deprecated).
 const AUTHORIZE_URL =
   "https://login.live.com/oauth20_authorize.srf" +
   "?client_id=0000000048170EF2" +
@@ -219,33 +223,47 @@ async function attemptCheck(email, password) {
       return result;
     }
 
-    // Step 3: Get PIFD token for payment API access
-    let pifdToken = "";
+    // Step 3: Get MSAuth1.0 token via account.microsoft.com — same flow the
+    // purchaser uses successfully. This replaced the deprecated PIFD delegate flow.
+    let msToken = "";
     try {
-      const r2 = await sessionGet(
-        "https://login.live.com/oauth20_authorize.srf?" +
-        "client_id=000000000004773A&response_type=token" +
-        "&scope=PIFD.Read+PIFD.Create+PIFD.Update+PIFD.Delete" +
-        "&redirect_uri=https%3A%2F%2Faccount.microsoft.com%2Fauth%2Fcomplete-silent-delegate-auth" +
-        "&state=%7B%22userId%22%3A%22bf3383c9b44aa8c9%22%2C%22scopeSet%22%3A%22pidl%22%7D" +
-        "&prompt=none",
-        jar,
-        { Host: "login.live.com", Referer: "https://account.microsoft.com/" }
+      // Touch buynow first like the puller does — primes the cookies
+      await proxiedFetch("https://buynowui.production.store-web.dynamics.com/akam/13/79883e11", {
+        headers: { "User-Agent": USER_AGENT, Cookie: jar.toString() },
+      }).catch(() => {});
+
+      const tokRes = await proxiedFetch(
+        "https://account.microsoft.com/auth/acquire-onbehalf-of-token?scopes=MSComServiceMBISSL",
+        {
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+            "Cache-Control": "no-cache",
+            Pragma: "no-cache",
+            Referer: "https://account.microsoft.com/billing/orders",
+            "User-Agent": USER_AGENT,
+            Cookie: jar.toString(),
+          },
+        }
       );
-      pifdToken = parseLR(r2.url, "access_token=", "&token_type");
-      if (!pifdToken) pifdToken = parseLR(r2.url, "access_token=", "&");
-      if (pifdToken) pifdToken = decodeURIComponent(pifdToken);
+      if (tokRes.status === 200) {
+        try {
+          const tokData = await tokRes.json();
+          if (Array.isArray(tokData) && tokData[0]?.token) msToken = tokData[0].token;
+        } catch {}
+      }
     } catch {}
 
-    if (!pifdToken) { result.status = "fail"; result.detail = "Token failed"; return result; }
+    if (!msToken) { result.status = "fail"; result.detail = "Token failed"; return result; }
 
     const payHeaders = {
       "User-Agent": USER_AGENT, Pragma: "no-cache",
       Accept: "application/json", "Accept-Language": "en-US,en;q=0.9",
-      Authorization: `MSADELEGATE1.0="${pifdToken}"`,
+      Authorization: `MSAuth1.0 t=${msToken}, p=MSAComm`,
       "Content-Type": "application/json",
       Origin: "https://account.microsoft.com",
-      Referer: "https://account.microsoft.com/",
+      Referer: "https://account.microsoft.com/billing/orders",
     };
 
     const refundableItems = [];

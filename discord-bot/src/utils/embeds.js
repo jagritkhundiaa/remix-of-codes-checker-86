@@ -580,8 +580,8 @@ function authListEmbed(entries) {
 // Section groupings for the help dropdown
 const HELP_SECTIONS = {
   core: { label: "-- Core Tools --", categories: ["checker", "claimer", "puller"] },
-  account: { label: "-- Account Tools --", categories: ["inbox", "rewards", "refund", "recovery"] },
-  owner: { label: "-- Owner Only --", categories: ["purchaser", "changer", "admin"] },
+  account: { label: "-- Account Tools --", categories: ["inbox", "rewards", "refund"] },
+  owner: { label: "-- Owner Only --", categories: ["admin"] },
 };
 
 const HELP_CATEGORIES = {
@@ -683,48 +683,6 @@ const HELP_CATEGORIES = {
       "  All results sent to your DMs.",
     ].join("\n"),
   },
-  purchaser: {
-    label: "Purchaser",
-    description: "Buy from Microsoft Store [Owner]",
-    section: "owner",
-    content: (p) => [
-      "Purchaser  [Owner Only]",
-      "========================================",
-      "",
-      "  Commands",
-      "  ----------------------------------------",
-      `  ${p}purchase <email:pass> <product_id>`,
-      "    Buy items from the Microsoft Store.",
-      "",
-      `  ${p}search <query>`,
-      "    Search for products.",
-      "",
-      "  Output",
-      "  ----------------------------------------",
-      "  All results sent to your DMs.",
-    ].join("\n"),
-  },
-  changer: {
-    label: "Changer",
-    description: "Change passwords & check accounts [Owner]",
-    section: "owner",
-    content: (p) => [
-      "Changer  [Owner Only]",
-      "========================================",
-      "",
-      "  Commands",
-      "  ----------------------------------------",
-      `  ${p}changer <email:pass> <new_password>`,
-      "    Change password on MS accounts.",
-      "",
-      `  ${p}checker <email:pass> or attach .txt`,
-      "    Validate account credentials.",
-      "",
-      "  Output",
-      "  ----------------------------------------",
-      "  All results sent to your DMs.",
-    ].join("\n"),
-  },
   inbox: {
     label: "Inbox AIO",
     description: "Scan inboxes for 50+ services",
@@ -744,30 +702,9 @@ const HELP_CATEGORIES = {
       "  Results delivered as ZIP with per-",
       "  service folders in your DMs.",
       "",
-      "  Options",
+      "  Notes",
       "  ----------------------------------------",
-      `    threads  1-50 (default 5)`,
-    ].join("\n"),
-  },
-  recovery: {
-    label: "Recovery",
-    description: "Recover accounts via ACSR",
-    section: "account",
-    content: (p) => [
-      "Recovery",
-      "========================================",
-      "",
-      "  Commands",
-      "  ----------------------------------------",
-      `  ${p}recover <email(s)> <new_password>`,
-      "    Recover account(s) via ACSR.",
-      "",
-      `  ${p}captcha <solution>`,
-      "    Submit CAPTCHA for active recovery.",
-      "",
-      "  Output",
-      "  ----------------------------------------",
-      "  All results sent to your DMs.",
+      "    Controlled concurrency, no skipped hits.",
     ].join("\n"),
   },
   admin: {
@@ -801,6 +738,51 @@ const HELP_CATEGORIES = {
     ].join("\n"),
   },
 };
+
+// ── Gen system embeds (hidden from main help) ─────────────────
+
+function genHelpEmbed(prefix) {
+  const block = [
+    "Gen System  [Hidden]",
+    "========================================",
+    "",
+    "  User Commands",
+    "  ----------------------------------------",
+    `  ${prefix}gen <product> <amount>`,
+    "    Pull stock items. Users: 1 per request,",
+    "    200s cooldown. Admins: 50 per request.",
+    "",
+    `  ${prefix}stock`,
+    "    List all products and stock counts.",
+    "",
+    "  Stock Management",
+    "  ----------------------------------------",
+    `  ${prefix}addstock <product> + attach .txt`,
+    `  ${prefix}replacegenstock <product> + attach .txt`,
+    `  ${prefix}downloadgenstock`,
+    "",
+    "  Output",
+    "  ----------------------------------------",
+    "  Items delivered via DM.",
+  ];
+  return header().setColor(COLORS.PRIMARY).setDescription(`\`\`\`\n${block.join("\n")}\n\`\`\``);
+}
+
+function stockListEmbed(entries) {
+  if (entries.length === 0) {
+    return header().setColor(COLORS.MUTED).setDescription("```\nStock\n----------------------------\n\nNo products yet. Use .addstock to add some.\n```");
+  }
+  const lines = ["Stock", "----------------------------", ""];
+  for (const e of entries) {
+    lines.push(`  ${e.name.padEnd(20)}${e.count}`);
+  }
+  lines.push("", "----------------------------", `  Total products: ${entries.length}`);
+  return header().setColor(COLORS.INFO).setDescription(`\`\`\`\n${lines.join("\n")}\n\`\`\``);
+}
+
+function unauthorisedEmbed() {
+  return header().setColor(COLORS.WARNING).setDescription("hi unauthorised dude.. reply **milk** to this chat to gain auto access if not wait for owner");
+}
 
 function helpOverviewEmbed(prefix) {
   const sectionLines = [];
@@ -1426,4 +1408,7 @@ module.exports = {
   steamProgressEmbed,
   steamResultsEmbed,
   steamHitEmbed,
+  genHelpEmbed,
+  stockListEmbed,
+  unauthorisedEmbed,
 };

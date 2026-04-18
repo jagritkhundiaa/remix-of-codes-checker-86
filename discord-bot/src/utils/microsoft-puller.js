@@ -8,7 +8,7 @@ const crypto = require("crypto");
 const { checkCodes } = require("./microsoft-checker");
 const { getWlids } = require("./wlid-store");
 const { proxiedFetch } = require("./proxy-manager");
-const { scrapeRewards } = require("./microsoft-rewards-scraper");
+const { runQueue } = require("./account-queue");
 
 // ── Code Format Validation (exact match to Python) ───────────
 
@@ -647,10 +647,12 @@ async function validateCodesWithStore(email, password, codes, onProgress) {
 }
 
 /**
- * Full pull pipeline:
- *   Phase 1 — Fetch codes from Game Pass perks (normal puller)
- *   Phase 2 — PRS recheck (runs AFTER Phase 1 completes, sequential)
- *   Phase 3 — Validate all codes using WLID checker
+ * Full pull pipeline (controlled concurrency, no skipped hits):
+ *   Phase 1 — Fetch codes from Game Pass perks with 3 workers + retry queue
+ *   Phase 2 — Validate all codes using WLID checker
+ *
+ * Phase 2 (PRS recheck) was REMOVED to prevent skips and save time.
+ * Each fetched code carries a `sourceEmail` so DMs can show origin.
  */
 async function pullCodes(accounts, onProgress, signal) {
   const parsed = accounts.map((a) => {
@@ -658,103 +660,77 @@ async function pullCodes(accounts, onProgress, signal) {
     return i === -1 ? { email: a, password: "" } : { email: a.substring(0, i), password: a.substring(i + 1) };
   });
 
-  const threads = Math.min(parsed.length, 10);
-
-  // ── Phase 1: Normal Puller — fetch codes from Game Pass perks ──
-  const allCodes = [];
   const fetchResults = [];
-  let fetchDone = 0;
+  const allCodes = []; // [{ code, sourceEmail }]
 
-  async function fetchWorker() {
-    while (true) {
-      if (signal && signal.aborted) break;
-      const idx = fetchDone++;
-      if (idx >= parsed.length) break;
-      const { email, password } = parsed[idx];
-      const gpResult = await fetchFromAccount(email, password);
-      const gpCodes = gpResult.codes || [];
+  await runQueue({
+    items: parsed,
+    concurrency: 3,
+    maxRetries: 2,
+    signal,
+    runner: async ({ email, password }, attempt) => {
+      const result = await fetchFromAccount(email, password);
+      // Retry on transient login/oauth/xbox failures (max 2 retries via queue)
+      const transient =
+        result.error === "OAuth failed" ||
+        result.error === "Xbox tokens failed";
+      if (transient && attempt < 2) return { retry: true };
 
-      fetchResults.push({ email: gpResult.email, codes: [...gpCodes], links: gpResult.links || [], error: gpResult.error });
-      allCodes.push(...gpCodes);
+      const codes = result.codes || [];
+      const links = result.links || [];
+      fetchResults.push({ email: result.email, codes: [...codes], links, error: result.error });
+      for (const c of codes) allCodes.push({ code: c, sourceEmail: result.email });
 
-      if (onProgress)
+      if (onProgress) {
         onProgress("fetch", {
           email,
-          codes: gpCodes.length,
-          error: gpResult.error,
+          codes: codes.length,
+          error: result.error,
           done: fetchResults.length,
           total: parsed.length,
         });
-    }
-  }
-
-  fetchDone = 0;
-  const fetchWorkers = Array(Math.min(threads, parsed.length)).fill(null).map(() => fetchWorker());
-  await Promise.all(fetchWorkers);
-
-  if (signal && signal.aborted) return { fetchResults, validateResults: [] };
-
-  // ── Phase 2: PRS recheck — runs AFTER Phase 1 completes ──
-  // UI shows "Checking if no code is left..."
-  if (onProgress) onProgress("recheck_start", { total: parsed.length });
-
-  const gpCodeSet = new Set(allCodes);
-  let recheckDone = 0;
-
-  async function recheckWorker() {
-    while (true) {
-      if (signal && signal.aborted) break;
-      const idx = recheckDone++;
-      if (idx >= parsed.length) break;
-      const { email, password } = parsed[idx];
-
-      try {
-        const prsResult = await scrapeRewards([`${email}:${password}`], "All", 1, null, signal);
-        const prsCodes = (prsResult.allCodes || [])
-          .map(c => c.code)
-          .filter(c => c && /Z$/i.test(c) && !gpCodeSet.has(c));
-
-        if (prsCodes.length > 0) {
-          // Merge PRS codes into fetchResults + allCodes
-          const existing = fetchResults.find(r => r.email === email);
-          if (existing) {
-            existing.codes.push(...prsCodes);
-          }
-          allCodes.push(...prsCodes);
-          for (const c of prsCodes) gpCodeSet.add(c);
-        }
-      } catch {}
-
-      if (onProgress)
-        onProgress("recheck", { done: idx + 1, total: parsed.length });
-    }
-  }
-
-  recheckDone = 0;
-  const recheckWorkers = Array(Math.min(threads, parsed.length)).fill(null).map(() => recheckWorker());
-  await Promise.all(recheckWorkers);
+      }
+      return { result: result };
+    },
+  });
 
   if (signal && signal.aborted) return { fetchResults, validateResults: [] };
   if (allCodes.length === 0) return { fetchResults, validateResults: [] };
 
-  // ── Phase 3: Validate using WLID checker ──
+  // ── Phase 2: Validate using WLID checker ──
   const wlids = getWlids();
   if (wlids.length === 0) {
-    const validateResults = allCodes.map((c) => ({ code: c, status: "error", message: `${c} | No WLIDs stored — use .wlidset first` }));
+    const validateResults = allCodes.map(({ code, sourceEmail }) => ({
+      code,
+      sourceEmail,
+      status: "error",
+      message: `${code} | No WLIDs stored — use .wlidset first`,
+    }));
     return { fetchResults, validateResults };
   }
 
   if (onProgress) onProgress("validate_start", { total: allCodes.length, fetchResults });
 
-  const validateResults = await checkCodes(wlids, allCodes, 10, (done, total, lastResult) => {
+  // checkCodes wants raw code strings; we re-attach sourceEmail after.
+  const codeIndex = new Map();
+  allCodes.forEach((entry, i) => codeIndex.set(entry.code, entry.sourceEmail));
+
+  const validateResults = await checkCodes(wlids, allCodes.map(c => c.code), 10, (done, total, lastResult) => {
     if (onProgress) onProgress("validate", { done, total, status: lastResult?.status });
   }, signal);
+
+  // Attach source email so DMs can show "code | title | from email"
+  for (const r of validateResults) {
+    r.sourceEmail = codeIndex.get(r.code) || "";
+  }
 
   return { fetchResults, validateResults };
 }
 
 /**
  * Pull links only (promo links from Game Pass perks). No validation phase.
+ * Controlled concurrency — 3 workers, retry queue, no silent skips.
+ * Each link carries `sourceEmail` for DM attribution.
  */
 async function pullLinks(accounts, onProgress, signal) {
   const parsed = accounts.map((a) => {
@@ -762,35 +738,37 @@ async function pullLinks(accounts, onProgress, signal) {
     return i === -1 ? { email: a, password: "" } : { email: a.substring(0, i), password: a.substring(i + 1) };
   });
 
-  const threads = Math.min(parsed.length, 10);
-  const allLinks = [];
+  const allLinks = []; // [{ link, sourceEmail }]
   const fetchResults = [];
-  let fetchDone = 0;
 
-  async function fetchWorker() {
-    while (true) {
-      if (signal && signal.aborted) break;
-      const idx = fetchDone++;
-      if (idx >= parsed.length) break;
-      const { email, password } = parsed[idx];
+  await runQueue({
+    items: parsed,
+    concurrency: 3,
+    maxRetries: 2,
+    signal,
+    runner: async ({ email, password }, attempt) => {
       const result = await fetchFromAccount(email, password);
-      // For promopuller, only track links
-      fetchResults.push({ email: result.email, links: result.links, error: result.error });
-      allLinks.push(...result.links);
-      if (onProgress)
+      const transient =
+        result.error === "OAuth failed" ||
+        result.error === "Xbox tokens failed";
+      if (transient && attempt < 2) return { retry: true };
+
+      const links = result.links || [];
+      fetchResults.push({ email: result.email, links, error: result.error });
+      for (const l of links) allLinks.push({ link: l, sourceEmail: result.email });
+
+      if (onProgress) {
         onProgress("fetch", {
           email,
-          links: result.links.length,
+          links: links.length,
           error: result.error,
           done: fetchResults.length,
           total: parsed.length,
         });
-    }
-  }
-
-  fetchDone = 0;
-  const fetchWorkers = Array(Math.min(threads, parsed.length)).fill(null).map(() => fetchWorker());
-  await Promise.all(fetchWorkers);
+      }
+      return { result };
+    },
+  });
 
   return { fetchResults, allLinks };
 }

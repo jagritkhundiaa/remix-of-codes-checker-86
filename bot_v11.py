@@ -22,6 +22,7 @@ FORCE_ENGLISH = True  # english-only mode
 PREFIX = "/"
 MEMORY_FILE = "memory.json"
 SLAVES_FILE = "slaves.json"
+SAVAGE_FILE = "savage.txt"
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -32,11 +33,12 @@ tree = discord.app_commands.CommandTree(bot)
 client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
 
 # ================= STATE =================
-savage_global = False
+savage_global = True  # always on by default
 mood = defaultdict(lambda: 0.0)  # per-channel -1..+1
 last_reply_at = defaultdict(float)  # per-channel cooldown
 past_roasts = defaultdict(lambda: deque(maxlen=3))  # per-user last roasts
 slaves = set()  # user IDs marked as owner's slave
+savage_lines = []  # custom roast lines from savage.txt
 COOLDOWN = 3.0
 
 def parse_user_id(raw: str) -> int | None:
@@ -64,13 +66,32 @@ def save_json(path, data):
     except Exception:
         pass
 
+def load_savage_file():
+    global savage_lines
+    if not os.path.exists(SAVAGE_FILE):
+        try:
+            with open(SAVAGE_FILE, "w", encoding="utf-8") as f:
+                f.write("# Add custom savage roast lines here, one per line. Lines starting with # are ignored.\n")
+                f.write("# The bot will mix these into its style when roasting.\n")
+                f.write("you talk like your dad pulled out\n")
+                f.write("bro really thinks anyone asked\n")
+                f.write("your existence is a typo god never fixed\n")
+        except Exception: pass
+    try:
+        with open(SAVAGE_FILE, "r", encoding="utf-8") as f:
+            savage_lines = [ln.strip() for ln in f if ln.strip() and not ln.strip().startswith("#")]
+    except Exception:
+        savage_lines = []
+    print(f"[SAVAGE] loaded {len(savage_lines)} custom lines")
+
 def load_state():
     global slaves, savage_global
     mem = load_json(MEMORY_FILE, {})
     for uid, roasts in mem.get("past_roasts", {}).items():
         past_roasts[int(uid)] = deque(roasts, maxlen=3)
-    savage_global = bool(mem.get("savage_global", False))
+    savage_global = bool(mem.get("savage_global", True))  # default ON
     slaves = set(load_json(SLAVES_FILE, []))
+    load_savage_file()
 
 def save_state():
     save_json(MEMORY_FILE, {
@@ -153,7 +174,12 @@ def build_system(lang: str, target_user: str, target_id: int, force_savage: bool
     if reply_ctx:
         ctx = f"They are replying to this earlier message: \"{reply_ctx[:200]}\". Roast in that context."
 
-    return f"{base_rules} {tone} {slave_line} {callback} {ctx}"
+    custom = ""
+    if savage and savage_lines:
+        sample = random.sample(savage_lines, min(5, len(savage_lines)))
+        custom = "STYLE EXAMPLES (match this energy/vibe, do NOT copy verbatim, write your own line in the same flavor): " + " || ".join(sample)
+
+    return f"{base_rules} {tone} {slave_line} {callback} {ctx} {custom}"
 
 # ================= AI CALL =================
 async def get_reply(user_msg: str, target_user: str, target_id: int, force_savage: bool, ch_mood: float, lang: str, recent_roasts: list, is_owner: bool, is_slave: bool, reply_ctx: str | None) -> str:
@@ -200,6 +226,13 @@ async def cmd_savage(interaction: discord.Interaction, state: str):
     savage_global = state.lower() in ("on","true","1","yes")
     save_state()
     await interaction.response.send_message(f"savage mode: **{'ON 🔥' if savage_global else 'OFF'}**")
+
+@tree.command(name="reloadsavage", description="Reload savage.txt custom roast lines (owner only)")
+async def cmd_reloadsavage(interaction: discord.Interaction):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("only daddy", ephemeral=True); return
+    load_savage_file()
+    await interaction.response.send_message(f"♻️ reloaded **{len(savage_lines)}** savage lines from `{SAVAGE_FILE}`")
 
 @tree.command(name="slave", description="Mark a user as talkneon's slave (owner only)")
 async def cmd_slave(interaction: discord.Interaction, user_id: str):

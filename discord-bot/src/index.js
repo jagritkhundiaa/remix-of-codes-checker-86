@@ -17,11 +17,15 @@ const { checkRefundAccounts } = require("./utils/microsoft-refund");
 
 const { checkInboxAccounts, getServiceCount } = require("./utils/microsoft-inbox");
 const { searchProducts, getProductDetails, purchaseItems } = require("./utils/microsoft-purchaser");
-const { changePasswords, checkAccounts } = require("./utils/microsoft-changer");
-const { initiateRecovery, submitCaptchaAndContinue, submitNewPassword, downloadCaptchaImage } = require("./utils/microsoft-recover");
+// changer + recover modules removed per request
 const { loadProxies, isProxyEnabled, getProxyCount, getProxyStats, reloadProxies } = require("./utils/proxy-manager");
 const blacklist = require("./utils/blacklist");
 const { setWlids, getWlids, getWlidCount } = require("./utils/wlid-store");
+const welcomedStore = require("./utils/welcomed-store");
+const autopilot = require("./utils/autopilot");
+const antilink = require("./utils/antilink");
+const gen = require("./utils/gen-manager");
+const { extractCombos } = require("./utils/combo-extractor");
 const {
   progressEmbed,
   checkResultsEmbed,
@@ -59,8 +63,6 @@ const {
   adminPanelEmbed,
   detailedStatsEmbed,
   textAttachment,
-  recoverProgressEmbed,
-  recoverResultEmbed,
 } = require("./utils/embeds");
 const { checkRewardsBalances } = require("./utils/microsoft-rewards");
 const { checkNetflixAccounts } = require("./utils/netflix-checker");

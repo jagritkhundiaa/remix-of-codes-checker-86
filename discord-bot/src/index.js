@@ -1711,20 +1711,8 @@ client.on("interactionCreate", async (interaction) => {
     }
 
 
-    else if (commandName === "recover") {
-      await interaction.deferReply();
-      const emailsRaw = interaction.options.getString("emails");
-      const emailsFile = interaction.options.getAttachment("emails_file");
-      const newPassword = interaction.options.getString("new_password");
-      const threads = interaction.options.getInteger("threads") || 1;
-      await handleRecover(respond, user.id, emailsRaw, emailsFile, newPassword, threads, user, interaction);
-    }
+    // recover + captcha commands removed
 
-    else if (commandName === "captcha") {
-      await interaction.deferReply();
-      const solution = interaction.options.getString("solution");
-      await handleCaptchaSolve(respond, user.id, solution);
-    }
 
     // ── Admin commands ──
     else if (commandName === "admin") {

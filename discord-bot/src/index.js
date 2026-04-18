@@ -40,7 +40,6 @@ const {
   purchaseResultsEmbed,
   purchaseProgressEmbed,
   productSearchEmbed,
-  changerResultsEmbed,
   accountCheckerResultsEmbed,
   rewardsResultsEmbed,
   refundProgressEmbed,

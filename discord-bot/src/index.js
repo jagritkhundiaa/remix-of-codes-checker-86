@@ -367,14 +367,11 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
   const startTime = Date.now();
 
   try {
-    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
-    if (accountsFile) {
-      const lines = await fetchAttachmentLines(accountsFile);
-      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
-    }
-
-    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
-    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
+    const inlineText = accountsRaw || "";
+    const fileText = accountsFile ? await fetchAttachmentText(accountsFile) : "";
+    let accounts = extractCombosFromText(inlineText + "\n" + fileText);
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid email:password pairs found in your input.")] });
+    if (accounts.length > MAX_COMBO_LINES) accounts = accounts.slice(0, MAX_COMBO_LINES);
 
     const msg = await respond({
       embeds: [pullFetchProgressEmbed({ done: 0, total: accounts.length, totalCodes: 0, working: 0, failed: 0, withCodes: 0, noCodes: 0, startTime, username })],

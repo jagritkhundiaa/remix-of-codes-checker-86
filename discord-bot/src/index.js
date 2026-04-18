@@ -14,7 +14,7 @@ const { claimWlids } = require("./utils/microsoft-claimer");
 const { pullCodes, pullLinks } = require("./utils/microsoft-puller");
 const { checkRefundAccounts } = require("./utils/microsoft-refund");
 const { checkInboxAccounts, getServiceCount } = require("./utils/microsoft-inbox");
-const { loadProxies, isProxyEnabled, getProxyCount, getProxyStats } = require("./utils/proxy-manager");
+const { loadProxies, isProxyEnabled, getProxyCount, getProxyStats, addAndValidate, listProxies, removeProxy, healthCheck, clearProxies, displayProxy } = require("./utils/proxy-manager");
 const blacklist = require("./utils/blacklist");
 const { setWlids, getWlids, getWlidCount } = require("./utils/wlid-store");
 const { WelcomeStore } = require("./utils/welcome-store");
@@ -1053,6 +1053,7 @@ async function handleStock(respond) {
 }
 
 async function handleAddStock(respond, userId, product, attachment, inlineText) {
+  if (!isOwner(userId)) return respond({ embeds: [errorEmbed("Only the bot owner can add stock.")] });
   if (!product) return respond({ embeds: [errorEmbed(`Usage: \`${config.PREFIX}addstock <product>\` + attach .txt OR inline lines.`)] });
   let text = inlineText || "";
   if (attachment) text += "\n" + (await fetchAttachmentLines(attachment));

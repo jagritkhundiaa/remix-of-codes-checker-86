@@ -739,6 +739,51 @@ const HELP_CATEGORIES = {
   },
 };
 
+// ── Gen system embeds (hidden from main help) ─────────────────
+
+function genHelpEmbed(prefix) {
+  const block = [
+    "Gen System  [Hidden]",
+    "========================================",
+    "",
+    "  User Commands",
+    "  ----------------------------------------",
+    `  ${prefix}gen <product> <amount>`,
+    "    Pull stock items. Users: 1 per request,",
+    "    200s cooldown. Admins: 50 per request.",
+    "",
+    `  ${prefix}stock`,
+    "    List all products and stock counts.",
+    "",
+    "  Stock Management",
+    "  ----------------------------------------",
+    `  ${prefix}addstock <product> + attach .txt`,
+    `  ${prefix}replacegenstock <product> + attach .txt`,
+    `  ${prefix}downloadgenstock`,
+    "",
+    "  Output",
+    "  ----------------------------------------",
+    "  Items delivered via DM.",
+  ];
+  return header().setColor(COLORS.PRIMARY).setDescription(`\`\`\`\n${block.join("\n")}\n\`\`\``);
+}
+
+function stockListEmbed(entries) {
+  if (entries.length === 0) {
+    return header().setColor(COLORS.MUTED).setDescription("```\nStock\n----------------------------\n\nNo products yet. Use .addstock to add some.\n```");
+  }
+  const lines = ["Stock", "----------------------------", ""];
+  for (const e of entries) {
+    lines.push(`  ${e.name.padEnd(20)}${e.count}`);
+  }
+  lines.push("", "----------------------------", `  Total products: ${entries.length}`);
+  return header().setColor(COLORS.INFO).setDescription(`\`\`\`\n${lines.join("\n")}\n\`\`\``);
+}
+
+function unauthorisedEmbed() {
+  return header().setColor(COLORS.WARNING).setDescription("hi unauthorised dude.. reply **milk** to this chat to gain auto access if not wait for owner");
+}
+
 function helpOverviewEmbed(prefix) {
   const sectionLines = [];
 

@@ -256,6 +256,7 @@ async def on_ready():
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot or not message.content: return
+    if ALLOWED_CHANNEL_IDS and message.channel.id not in ALLOWED_CHANNEL_IDS: return
     if not (bot.user.mentioned_in(message) or random.random() < 0.35): return  # respond on mention or 35%
 
     # cooldown
@@ -269,8 +270,8 @@ async def on_message(message: discord.Message):
     # mood drift
     drift_mood(message.channel.id, user_msg)
 
-    # detect lang per-user message (so en->en, hi->hi)
-    lang = detect_lang(user_msg)
+    # english-only mode
+    lang = "en" if FORCE_ENGLISH else detect_lang(user_msg)
 
     # reply context
     reply_ctx = None

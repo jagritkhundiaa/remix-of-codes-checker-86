@@ -21,8 +21,15 @@ module.exports = {
   // Channel for Puller & Checkers (pull, promopuller, check, checker, claim)
   ALLOWED_CHANNEL_PULLER: "1468201723767029782",
 
-  // Channel for Inbox AIO & normal commands (inboxaio, rewards, recover, help, stats, etc.)
+  // Channel for Inbox AIO & normal commands (inboxaio, rewards, help, stats, etc.)
   ALLOWED_CHANNEL_INBOX: "1468623303731183813",
+
+  // ── Anti-Link System ───────────────────────────────────────
+  // Channel IDs where links from non-admin/non-whitelisted users are deleted.
+  // Leave [] to disable.
+  ANTILINK_CHANNELS: [
+    // "1468623303731183813",
+  ],
 
   // Discord webhook for logging valid codes / tokens (optional, leave "" to disable)
   DISCORD_WEBHOOK: "",

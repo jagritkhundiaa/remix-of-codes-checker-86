@@ -296,14 +296,12 @@ async function handleClaim(respond, userId, accountsRaw, accountsFile, threads =
   activeAborts.set(userId, ac);
 
   try {
-    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
-    if (accountsFile) {
-      const lines = await fetchAttachmentLines(accountsFile);
-      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
-    }
+    const inlineText = accountsRaw || "";
+    const fileText = accountsFile ? await fetchAttachmentText(accountsFile) : "";
+    let accounts = extractCombosFromText(inlineText + "\n" + fileText);
 
-    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
-    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid email:password pairs found in your input.")] });
+    if (accounts.length > MAX_COMBO_LINES) accounts = accounts.slice(0, MAX_COMBO_LINES);
 
     const msg = await respond({
       embeds: [progressEmbed(0, accounts.length, "Claiming WLIDs")],

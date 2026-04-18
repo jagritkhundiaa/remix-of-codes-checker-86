@@ -1410,7 +1410,7 @@ client.on("messageCreate", async (message) => {
     return message.reply({ embeds: [removed ? successEmbed(`<@${targetId}> removed from anti-link whitelist.`) : errorEmbed("That user wasn't whitelisted.")] });
   }
 
-  // ── Gen system (hidden — works in any channel) ──
+  // ── Gen system: only .gen and .stock are public; rest = owner only ──
   if (cmd === "gen") return handleGen((opts) => message.reply(opts), message.author.id, args, message.attachments.first());
   if (cmd === "stock") return handleStock((opts) => message.reply(opts));
   if (cmd === "addstock") {
@@ -1423,6 +1423,34 @@ client.on("messageCreate", async (message) => {
   }
   if (cmd === "downloadgenstock") {
     return handleDownloadStock((opts) => message.reply(opts), message.author.id);
+  }
+
+  // ── Proxy panel (owner only) ──
+  if (cmd === "proxyadd" || cmd === "addproxy") {
+    return handleProxyAdd((opts) => message.reply(opts), message.author.id, message.attachments.first(), args.join("\n"));
+  }
+  if (cmd === "proxylist" || cmd === "proxies") {
+    return handleProxyList((opts) => message.reply(opts), message.author.id);
+  }
+  if (cmd === "proxyclear" || cmd === "clearproxies") {
+    return handleProxyClear((opts) => message.reply(opts), message.author.id);
+  }
+  if (cmd === "proxyhealth" || cmd === "checkproxies") {
+    return handleProxyHealth((opts) => message.reply(opts), message.author.id);
+  }
+  if (cmd === "proxyexport" || cmd === "exportproxies") {
+    return handleProxyExport((opts) => message.reply(opts), message.author.id);
+  }
+  if (cmd === "proxyremove" || cmd === "removeproxy") {
+    return handleProxyRemove((opts) => message.reply(opts), message.author.id, args[0]);
+  }
+  if (cmd === "proxystats") {
+    return handleProxyStats((opts) => message.reply(opts), message.author.id);
+  }
+  if (cmd === "proxyreload" || cmd === "reloadproxies") {
+    if (!isOwner(message.author.id)) return;
+    const n = loadProxies();
+    return message.reply({ embeds: [successEmbed(`Reloaded **${n}** proxies.`)] });
   }
 
   // ── Channel enforcement for normal commands ──

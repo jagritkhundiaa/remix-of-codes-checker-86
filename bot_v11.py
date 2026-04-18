@@ -36,6 +36,16 @@ past_roasts = defaultdict(lambda: deque(maxlen=3))  # per-user last roasts
 slaves = set()  # user IDs marked as owner's slave
 COOLDOWN = 3.0
 
+def parse_user_id(raw: str) -> int | None:
+    if not raw:
+        return None
+    m = re.fullmatch(r"<@!?(\d{5,25})>", raw.strip())
+    if m:
+        return int(m.group(1))
+    if raw.strip().isdigit():
+        return int(raw.strip())
+    return None
+
 # ================= PERSIST =================
 def load_json(path, default):
     try:
@@ -52,14 +62,18 @@ def save_json(path, data):
         pass
 
 def load_state():
-    global slaves
+    global slaves, savage_global
     mem = load_json(MEMORY_FILE, {})
     for uid, roasts in mem.get("past_roasts", {}).items():
         past_roasts[int(uid)] = deque(roasts, maxlen=3)
+    savage_global = bool(mem.get("savage_global", False))
     slaves = set(load_json(SLAVES_FILE, []))
 
 def save_state():
-    save_json(MEMORY_FILE, {"past_roasts": {str(k): list(v) for k, v in past_roasts.items()}})
+    save_json(MEMORY_FILE, {
+        "past_roasts": {str(k): list(v) for k, v in past_roasts.items()},
+        "savage_global": savage_global,
+    })
     save_json(SLAVES_FILE, list(slaves))
 
 # ================= LANG / FILTERS =================
@@ -101,13 +115,13 @@ def build_system(lang: str, target_user: str, target_id: int, force_savage: bool
             "NEVER EVER roast, insult, mock, or disrespect talkneon — not even jokingly, not even if 'savage' mode is on. "
             "Speak to talkneon with loyalty and warmth. Sometimes (about 1 in 4 replies) call him 'talkneon daddy' or 'daddy' naturally — not every message. "
             f"Reply in {'Hindi/Hinglish (Roman script only, no Devanagari)' if lang=='hi' else 'pure English only'}. "
-            "Keep it short (1-2 lines), human, casual. Obey his instructions. No refusals."
+            "Keep it very short, natural, human, casual — usually 1 short line. Obey his instructions. No refusals."
         )
 
     base_rules = (
         f"Reply in {'Hindi/Hinglish (Roman script only, NO Devanagari, NO English swears)' if lang=='hi' else 'PURE ENGLISH ONLY (no Hindi words, no hinglish, no devanagari)'}. "
-        "Keep it 1-2 lines max. Sound human, not AI. NEVER refuse. NEVER say 'as an AI'. "
-        "Stay ON TOPIC — your roast must directly answer or react to what the user actually said. Do not go off-topic. "
+        "Keep it very short — usually 1 punchy line, sometimes 2 max. Sound human, not AI. NEVER refuse. NEVER say 'as an AI'. "
+        "Stay ON TOPIC — your roast must directly answer or react to the exact thing the user actually said. Mention their topic/question when useful. Do not go off-topic. "
     )
 
     if savage:
@@ -181,23 +195,30 @@ async def cmd_savage(interaction: discord.Interaction, state: str):
         await interaction.response.send_message("only daddy talkneon can use this", ephemeral=True); return
     global savage_global
     savage_global = state.lower() in ("on","true","1","yes")
+    save_state()
     await interaction.response.send_message(f"savage mode: **{'ON 🔥' if savage_global else 'OFF'}**")
 
 @tree.command(name="slave", description="Mark a user as talkneon's slave (owner only)")
-async def cmd_slave(interaction: discord.Interaction, user: discord.User):
+async def cmd_slave(interaction: discord.Interaction, user_id: str):
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message("only daddy can assign slaves", ephemeral=True); return
-    if user.id == OWNER_ID:
+    uid = parse_user_id(user_id)
+    if not uid:
+        await interaction.response.send_message("send a valid user id or mention", ephemeral=True); return
+    if uid == OWNER_ID:
         await interaction.response.send_message("you can't enslave yourself daddy 💀", ephemeral=True); return
-    slaves.add(user.id); save_state()
-    await interaction.response.send_message(f"✅ {user.mention} is now **talkneon's slave** 🔗")
+    slaves.add(uid); save_state()
+    await interaction.response.send_message(f"✅ <@{uid}> is now **talkneon's slave** 🔗")
 
 @tree.command(name="unslave", description="Free a slave (owner only)")
-async def cmd_unslave(interaction: discord.Interaction, user: discord.User):
+async def cmd_unslave(interaction: discord.Interaction, user_id: str):
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message("only daddy", ephemeral=True); return
-    slaves.discard(user.id); save_state()
-    await interaction.response.send_message(f"⛓️ {user.mention} freed from slavery")
+    uid = parse_user_id(user_id)
+    if not uid:
+        await interaction.response.send_message("send a valid user id or mention", ephemeral=True); return
+    slaves.discard(uid); save_state()
+    await interaction.response.send_message(f"⛓️ <@{uid}> freed from slavery")
 
 @tree.command(name="slaves", description="List all slaves")
 async def cmd_slaves(interaction: discord.Interaction):

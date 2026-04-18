@@ -396,21 +396,39 @@ async def on_message(message: discord.Message):
     is_slave = message.author.id in slaves
     force_savage = bool(BOT_INSULT_RE.search(user_msg)) and not is_owner
 
-    recent = list(past_roasts[message.author.id])
+    # owner ping-to-roast: if owner mentions someone + says roast/cook/destroy etc
+    target_roast_user = None
+    ROAST_INTENT = re.compile(r"\b(roast|cook|destroy|insult|burn|mock|drag|flame|expose|kill|gaali|bezzati|fuck up|shit on)\b", re.I)
+    if is_owner and others and ROAST_INTENT.search(user_msg):
+        target_roast_user = others[0].display_name
+        force_savage = True
+
+    if target_roast_user:
+        recent = list(past_roasts[others[0].id])
+    elif not is_owner:
+        recent = list(past_roasts[message.author.id])
+    else:
+        recent = []
 
     async with message.channel.typing():
         reply = await get_reply(
             user_msg, message.author.display_name, message.author.id,
             force_savage, mood[message.channel.id], lang, recent,
             is_owner, is_slave, reply_ctx, mentioned_info, is_question,
+            target_roast_user,
         )
 
     if not reply: return
     bad = ["i can't","i cannot","as an ai","i'm sorry","sup","same here"]
     if any(b in reply.lower() for b in bad): return
 
-    # save roast memory (not for owner)
-    if not is_owner:
+    recent_global.append(reply)
+
+    if target_roast_user:
+        for u in others:
+            past_roasts[u.id].append(reply)
+        save_state()
+    elif not is_owner:
         past_roasts[message.author.id].append(reply)
         save_state()
 

@@ -33,11 +33,12 @@ tree = discord.app_commands.CommandTree(bot)
 client = OpenAI(base_url=BASE_URL, api_key=API_KEY)
 
 # ================= STATE =================
-savage_global = False
+savage_global = True  # always on by default
 mood = defaultdict(lambda: 0.0)  # per-channel -1..+1
 last_reply_at = defaultdict(float)  # per-channel cooldown
 past_roasts = defaultdict(lambda: deque(maxlen=3))  # per-user last roasts
 slaves = set()  # user IDs marked as owner's slave
+savage_lines = []  # custom roast lines from savage.txt
 COOLDOWN = 3.0
 
 def parse_user_id(raw: str) -> int | None:

@@ -8,7 +8,8 @@ const crypto = require("crypto");
 const { checkCodes } = require("./microsoft-checker");
 const { getWlids } = require("./wlid-store");
 const { proxiedFetch } = require("./proxy-manager");
-const { scrapeRewards } = require("./microsoft-rewards-scraper");
+// Phase 2 (rewards.bing.com order-history scrape) has been removed for stability.
+// Only Game Pass perks pulling (Phase 1) + WLID validation (Phase 3) remain.
 
 // ── Code Format Validation (exact match to Python) ───────────
 
@@ -647,10 +648,13 @@ async function validateCodesWithStore(email, password, codes, onProgress) {
 }
 
 /**
- * Full pull pipeline:
- *   Phase 1 — Fetch codes from Game Pass perks (normal puller)
- *   Phase 2 — PRS recheck (runs AFTER Phase 1 completes, sequential)
- *   Phase 3 — Validate all codes using WLID checker
+ * Pull pipeline (Phase 2 removed):
+ *   Phase 1 — Fetch Game Pass perks codes per account (controlled concurrency)
+ *   Phase 2 — Validate ALL collected codes with stored WLIDs (no skips)
+ *
+ * Concurrency is capped at 5 to stop the bot from skipping hits when the
+ * Game Pass / Xbox endpoints rate-limit. Codes are emitted with their source
+ * account so the caller can DM "code | from email" to the user.
  */
 async function pullCodes(accounts, onProgress, signal) {
   const parsed = accounts.map((a) => {
@@ -658,24 +662,34 @@ async function pullCodes(accounts, onProgress, signal) {
     return i === -1 ? { email: a, password: "" } : { email: a.substring(0, i), password: a.substring(i + 1) };
   });
 
-  const threads = Math.min(parsed.length, 10);
+  // Lower concurrency = fewer skipped hits.
+  const threads = Math.min(parsed.length, 5);
 
-  // ── Phase 1: Normal Puller — fetch codes from Game Pass perks ──
+  // ── Phase 1: fetch perks codes ──
   const allCodes = [];
+  const codeSources = new Map(); // code -> source email
   const fetchResults = [];
-  let fetchDone = 0;
+  let cursor = 0;
 
   async function fetchWorker() {
     while (true) {
       if (signal && signal.aborted) break;
-      const idx = fetchDone++;
+      const idx = cursor++;
       if (idx >= parsed.length) break;
       const { email, password } = parsed[idx];
       const gpResult = await fetchFromAccount(email, password);
       const gpCodes = gpResult.codes || [];
 
-      fetchResults.push({ email: gpResult.email, codes: [...gpCodes], links: gpResult.links || [], error: gpResult.error });
-      allCodes.push(...gpCodes);
+      fetchResults.push({
+        email: gpResult.email,
+        codes: [...gpCodes],
+        links: gpResult.links || [],
+        error: gpResult.error,
+      });
+      for (const c of gpCodes) {
+        if (!codeSources.has(c)) codeSources.set(c, gpResult.email);
+        allCodes.push(c);
+      }
 
       if (onProgress)
         onProgress("fetch", {
@@ -688,69 +702,35 @@ async function pullCodes(accounts, onProgress, signal) {
     }
   }
 
-  fetchDone = 0;
-  const fetchWorkers = Array(Math.min(threads, parsed.length)).fill(null).map(() => fetchWorker());
-  await Promise.all(fetchWorkers);
+  cursor = 0;
+  const workers = Array(Math.min(threads, parsed.length)).fill(null).map(() => fetchWorker());
+  await Promise.all(workers);
 
-  if (signal && signal.aborted) return { fetchResults, validateResults: [] };
+  if (signal && signal.aborted) return { fetchResults, validateResults: [], codeSources };
+  if (allCodes.length === 0) return { fetchResults, validateResults: [], codeSources };
 
-  // ── Phase 2: PRS recheck — runs AFTER Phase 1 completes ──
-  // UI shows "Checking if no code is left..."
-  if (onProgress) onProgress("recheck_start", { total: parsed.length });
-
-  const gpCodeSet = new Set(allCodes);
-  let recheckDone = 0;
-
-  async function recheckWorker() {
-    while (true) {
-      if (signal && signal.aborted) break;
-      const idx = recheckDone++;
-      if (idx >= parsed.length) break;
-      const { email, password } = parsed[idx];
-
-      try {
-        const prsResult = await scrapeRewards([`${email}:${password}`], "All", 1, null, signal);
-        const prsCodes = (prsResult.allCodes || [])
-          .map(c => c.code)
-          .filter(c => c && /Z$/i.test(c) && !gpCodeSet.has(c));
-
-        if (prsCodes.length > 0) {
-          // Merge PRS codes into fetchResults + allCodes
-          const existing = fetchResults.find(r => r.email === email);
-          if (existing) {
-            existing.codes.push(...prsCodes);
-          }
-          allCodes.push(...prsCodes);
-          for (const c of prsCodes) gpCodeSet.add(c);
-        }
-      } catch {}
-
-      if (onProgress)
-        onProgress("recheck", { done: idx + 1, total: parsed.length });
-    }
-  }
-
-  recheckDone = 0;
-  const recheckWorkers = Array(Math.min(threads, parsed.length)).fill(null).map(() => recheckWorker());
-  await Promise.all(recheckWorkers);
-
-  if (signal && signal.aborted) return { fetchResults, validateResults: [] };
-  if (allCodes.length === 0) return { fetchResults, validateResults: [] };
-
-  // ── Phase 3: Validate using WLID checker ──
+  // ── Phase 2: validate ──
   const wlids = getWlids();
   if (wlids.length === 0) {
-    const validateResults = allCodes.map((c) => ({ code: c, status: "error", message: `${c} | No WLIDs stored — use .wlidset first` }));
-    return { fetchResults, validateResults };
+    const validateResults = allCodes.map((c) => ({
+      code: c,
+      status: "error",
+      message: `${c} | No WLIDs stored — use .wlidset first`,
+      source: codeSources.get(c) || "",
+    }));
+    return { fetchResults, validateResults, codeSources };
   }
 
   if (onProgress) onProgress("validate_start", { total: allCodes.length, fetchResults });
 
-  const validateResults = await checkCodes(wlids, allCodes, 10, (done, total, lastResult) => {
+  const raw = await checkCodes(wlids, allCodes, 10, (done, total, lastResult) => {
     if (onProgress) onProgress("validate", { done, total, status: lastResult?.status });
   }, signal);
 
-  return { fetchResults, validateResults };
+  // Attach source account to each validated result
+  const validateResults = raw.map((r) => ({ ...r, source: codeSources.get(r.code) || "" }));
+
+  return { fetchResults, validateResults, codeSources };
 }
 
 /**

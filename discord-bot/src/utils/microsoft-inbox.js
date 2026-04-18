@@ -666,8 +666,7 @@ async function checkInboxAccounts(accounts, threads = 5, onProgress, signal) {
     }
   }
 
-  // Cap concurrency low — high threads cause inbox skips
-  const concurrency = Math.min(threads, 4);
+  const concurrency = Math.min(threads, 50);
   const workers = Array(Math.min(concurrency, accounts.length)).fill(null).map(() => worker());
   await Promise.all(workers);
   return results;

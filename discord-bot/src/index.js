@@ -17,11 +17,15 @@ const { checkRefundAccounts } = require("./utils/microsoft-refund");
 
 const { checkInboxAccounts, getServiceCount } = require("./utils/microsoft-inbox");
 const { searchProducts, getProductDetails, purchaseItems } = require("./utils/microsoft-purchaser");
-const { changePasswords, checkAccounts } = require("./utils/microsoft-changer");
-const { initiateRecovery, submitCaptchaAndContinue, submitNewPassword, downloadCaptchaImage } = require("./utils/microsoft-recover");
+// changer + recover modules removed per request
 const { loadProxies, isProxyEnabled, getProxyCount, getProxyStats, reloadProxies } = require("./utils/proxy-manager");
 const blacklist = require("./utils/blacklist");
 const { setWlids, getWlids, getWlidCount } = require("./utils/wlid-store");
+const welcomedStore = require("./utils/welcomed-store");
+const autopilot = require("./utils/autopilot");
+const antilink = require("./utils/antilink");
+const gen = require("./utils/gen-manager");
+const { extractCombos } = require("./utils/combo-extractor");
 const {
   progressEmbed,
   checkResultsEmbed,
@@ -59,8 +63,6 @@ const {
   adminPanelEmbed,
   detailedStatsEmbed,
   textAttachment,
-  recoverProgressEmbed,
-  recoverResultEmbed,
 } = require("./utils/embeds");
 const { checkRewardsBalances } = require("./utils/microsoft-rewards");
 const { checkNetflixAccounts } = require("./utils/netflix-checker");
@@ -86,11 +88,9 @@ let webhookUrl = "";
 // Active abort controllers per user
 const activeAborts = new Map();
 
-// Active recovery sessions per user (for multi-step CAPTCHA flow)
-const activeRecoverySessions = new Map();
+// (recovery sessions removed)
 
-// Track users who have seen the welcome message
-const welcomedUsers = new Set();
+// Welcome state is now persisted on disk (welcomedStore)
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -101,12 +101,12 @@ function isOwner(userId) {
 // ── Channel enforcement ──────────────────────────────────────
 
 const PULLER_CHECKER_CMDS = new Set(["pull", "promopuller", "check", "checker", "claim"]);
-const INBOX_NORMAL_CMDS = new Set(["inboxaio", "rewards", "recover", "captcha", "help", "stats", "search", "purchase", "changer", "wlidset", "refund", "netflix", "steam"]);
+const INBOX_NORMAL_CMDS = new Set(["inboxaio", "rewards", "help", "stats", "search", "purchase", "wlidset", "refund", "netflix", "steam"]);
 
 function getRequiredChannel(cmd) {
   if (PULLER_CHECKER_CMDS.has(cmd)) return config.ALLOWED_CHANNEL_PULLER;
   if (INBOX_NORMAL_CMDS.has(cmd)) return config.ALLOWED_CHANNEL_INBOX;
-  return null; // admin commands (auth, deauth, admin, etc.) work in either channel
+  return null; // admin commands work anywhere
 }
 
 function checkChannelAccess(channelId, cmd) {
@@ -116,27 +116,33 @@ function checkChannelAccess(channelId, cmd) {
   return { allowed: false, requiredChannel: required };
 }
 
+function isAuthorizedAny(userId) {
+  return isOwner(userId) || auth.isAuthorized(userId) || autopilot.isGranted(userId);
+}
+
 function canUse(userId) {
   if (blacklist.isBlacklisted(userId)) return false;
-  const allowed = isOwner(userId) || auth.isAuthorized(userId);
-  if (allowed) otpManager.ensureAuthenticated(userId); // auto-session
+  const allowed = isAuthorizedAny(userId);
+  if (allowed) otpManager.ensureAuthenticated(userId);
   return allowed;
 }
 
 /**
- * Send welcome embed on first command use (per session).
- * Returns true if welcome was sent (caller should continue normally).
+ * First-ever-DM welcome (persisted across restarts).
+ * `respond` is the same response fn so we can DM the user.
  */
-async function sendWelcomeIfNeeded(respond, userId, username) {
-  if (welcomedUsers.has(userId)) return;
-  welcomedUsers.add(userId);
+async function sendWelcomeIfNeeded(user) {
+  if (welcomedStore.has(user.id)) return;
+  welcomedStore.add(user.id);
   try {
-    await respond({ embeds: [welcomeEmbed(username)] });
+    await user.send({ embeds: [welcomeEmbed(user.username)] });
   } catch {}
 }
 
 const MAX_COMBO_LINES = 4000;
 
+// Smart combo input: extracts email:pass from raw or "dirty" lines.
+// Falls back to plain split for non-combo data (codes, WLIDs).
 function splitInput(raw) {
   if (!raw) return [];
   return raw
@@ -145,11 +151,21 @@ function splitInput(raw) {
     .filter(Boolean);
 }
 
+function extractCombosFromText(text) {
+  return extractCombos(text, { max: MAX_COMBO_LINES });
+}
+
 async function fetchAttachmentLines(attachment) {
   if (!attachment) return [];
   const res = await fetch(attachment.url);
   const text = await res.text();
   return text.split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
+async function fetchAttachmentText(attachment) {
+  if (!attachment) return "";
+  const res = await fetch(attachment.url);
+  return await res.text();
 }
 
 function stopButton(userId) {
@@ -280,14 +296,12 @@ async function handleClaim(respond, userId, accountsRaw, accountsFile, threads =
   activeAborts.set(userId, ac);
 
   try {
-    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
-    if (accountsFile) {
-      const lines = await fetchAttachmentLines(accountsFile);
-      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
-    }
+    const inlineText = accountsRaw || "";
+    const fileText = accountsFile ? await fetchAttachmentText(accountsFile) : "";
+    let accounts = extractCombosFromText(inlineText + "\n" + fileText);
 
-    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
-    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid email:password pairs found in your input.")] });
+    if (accounts.length > MAX_COMBO_LINES) accounts = accounts.slice(0, MAX_COMBO_LINES);
 
     const msg = await respond({
       embeds: [progressEmbed(0, accounts.length, "Claiming WLIDs")],
@@ -353,14 +367,11 @@ async function handlePull(respond, userId, accountsRaw, accountsFile, dmUser = n
   const startTime = Date.now();
 
   try {
-    let accounts = splitInput(accountsRaw).filter((a) => a.includes(":"));
-    if (accountsFile) {
-      const lines = await fetchAttachmentLines(accountsFile);
-      accounts = accounts.concat(lines.filter((l) => l.includes(":")));
-    }
-
-    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid accounts provided (email:password format).")] });
-    if (accounts.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Too many accounts. Max ${MAX_COMBO_LINES} lines allowed.`)] });
+    const inlineText = accountsRaw || "";
+    const fileText = accountsFile ? await fetchAttachmentText(accountsFile) : "";
+    let accounts = extractCombosFromText(inlineText + "\n" + fileText);
+    if (accounts.length === 0) return respond({ embeds: [errorEmbed("No valid email:password pairs found in your input.")] });
+    if (accounts.length > MAX_COMBO_LINES) accounts = accounts.slice(0, MAX_COMBO_LINES);
 
     const msg = await respond({
       embeds: [pullFetchProgressEmbed({ done: 0, total: accounts.length, totalCodes: 0, working: 0, failed: 0, withCodes: 0, noCodes: 0, startTime, username })],

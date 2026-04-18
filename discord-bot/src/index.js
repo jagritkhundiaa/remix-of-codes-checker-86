@@ -1663,14 +1663,8 @@ client.on("interactionCreate", async (interaction) => {
       await handleSearch(respond, query);
     }
 
-    else if (commandName === "changer") {
-      await interaction.deferReply();
-      const accounts = interaction.options.getString("accounts");
-      const accountsFile = interaction.options.getAttachment("accounts_file");
-      const newPassword = interaction.options.getString("new_password");
-      const threads = interaction.options.getInteger("threads") || 5;
-      await handleChanger(respond, user.id, accounts, accountsFile, newPassword, threads, user);
-    }
+    // changer command removed
+
 
     else if (commandName === "checker") {
       await interaction.deferReply();

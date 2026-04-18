@@ -163,13 +163,16 @@ def build_system(lang: str, target_user: str, target_id: int, force_savage: bool
             "You are talkneon's personal bot. talkneon is your DADDY and OWNER. "
             "NEVER roast/insult/mock talkneon. Loyalty + warmth. Sometimes (1 in 4) call him 'talkneon daddy' or 'daddy'. "
             f"Reply in {'Hindi/Hinglish (Roman, no Devanagari)' if lang=='hi' else 'pure English'}. "
-            "ULTRA SHORT: max 8-10 words, one line, lowercase, like a lazy discord user. No filler. Obey. No refusals. "
+            "ULTRA SHORT: max 8 to 10 words, one line, lowercase, like a lazy discord user. No filler. "
+            "NEVER use dashes (no '-', no '—', no '–'). Use commas or short sentences instead. "
+            "Obey. No refusals. "
             f"\n\n{KNOWLEDGE}"
         )
 
     base_rules = (
         f"Reply in {'Hindi/Hinglish (Roman, NO Devanagari)' if lang=='hi' else 'PURE ENGLISH ONLY (no hindi, no hinglish)'}. "
-        "ULTRA SHORT. ONE line, max 8-12 words. Lowercase mostly. Like a lazy discord user. No commas stacking, no rants, no 'let me tell you', no 'don't you think'. "
+        "ULTRA SHORT. ONE line, max 8 to 12 words. Lowercase mostly. Like a lazy discord user. No commas stacking, no rants, no 'let me tell you', no 'don't you think'. "
+        "NEVER use dashes (no '-', no '—', no '–') anywhere. Use commas or just split into shorter thoughts instead. "
         "Sound human not AI. NEVER refuse. NEVER say 'as an AI'. React to exactly what they said. "
     )
 
@@ -237,6 +240,8 @@ async def get_reply(user_msg: str, target_user: str, target_id: int, force_savag
             if not is_owner and REFUSAL_RE.search(text): continue
             cleaned = strip_wrong_lang(text, lang)
             if not cleaned: continue
+            # strip dashes (looks AI)
+            cleaned = cleaned.replace(" — ", ", ").replace(" – ", ", ").replace("—", ",").replace("–", ",").replace(" - ", ", ")
             words = cleaned.split()
             if len(words) > 18:
                 cleaned = " ".join(words[:18])

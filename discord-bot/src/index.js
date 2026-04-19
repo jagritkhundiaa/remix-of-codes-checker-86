@@ -40,6 +40,8 @@ const {
   netflixResultsEmbed,
   steamProgressEmbed,
   steamResultsEmbed,
+  xboxChkProgressEmbed,
+  xboxChkResultsEmbed,
   errorEmbed,
   successEmbed,
   infoEmbed,
@@ -58,6 +60,7 @@ const {
 const { checkRewardsBalances } = require("./utils/microsoft-rewards");
 const { checkNetflixAccounts } = require("./utils/netflix-checker");
 const { checkSteamAccounts, shortenGames } = require("./utils/steam-checker");
+const { checkXboxAccounts } = require("./utils/xbox-full-checker");
 
 const client = new Client({
   intents: [
@@ -92,7 +95,7 @@ function isOwner(userId) {
 // ── Channel enforcement ──────────────────────────────────────
 
 const PULLER_CHECKER_CMDS = new Set(["pull", "promopuller", "check", "checker", "claim"]);
-const INBOX_NORMAL_CMDS = new Set(["inboxaio", "rewards", "help", "stats", "wlidset", "refund", "netflix", "steam"]);
+const INBOX_NORMAL_CMDS = new Set(["inboxaio", "rewards", "help", "stats", "wlidset", "refund", "netflix", "steam", "xboxchk"]);
 
 function getRequiredChannel(cmd) {
   if (PULLER_CHECKER_CMDS.has(cmd)) return config.ALLOWED_CHANNEL_PULLER;
@@ -1118,6 +1121,85 @@ async function maybeHandleMilkReply(message) {
   return true;
 }
 
+// ── Xbox Full Capture Check ──────────────────────────────────
+
+async function handleXboxChk(respond, userId, accountsRaw, accountsFile, threads = 30, dmUser = null) {
+  if (!canUse(userId)) return respond({ embeds: [errorEmbed("You are not authorized.")] });
+  if (!limiter.acquire(userId)) return respond({ embeds: [errorEmbed("You already have an active process.")] });
+
+  try {
+    const { combos } = await gatherCombos(accountsRaw, accountsFile);
+    if (!combos.length) return respond({ embeds: [errorEmbed("No valid email:pass combos found.")] });
+    if (combos.length > MAX_COMBO_LINES) return respond({ embeds: [errorEmbed(`Max ${MAX_COMBO_LINES} lines.`)] });
+
+    const tc = Math.min(Math.max(threads, 1), 50);
+    const msg = await respond({ embeds: [xboxChkProgressEmbed(0, combos.length)] });
+    const ac = new AbortController();
+    activeAborts.set(userId, ac);
+
+    const t0 = Date.now();
+    let lastEdit = 0;
+    const live = { hits: 0, free: 0, locked: 0, fails: 0 };
+
+    const results = await checkXboxAccounts(combos, tc, (done, total) => {
+      const now = Date.now();
+      if (now - lastEdit < 2000) return;
+      lastEdit = now;
+      const sec = (now - t0) / 1000;
+      const cpm = sec > 0 ? Math.round(done / (sec / 60)) : 0;
+      updateProgress(msg, xboxChkProgressEmbed(done, total, { ...live, cpm }), userId).catch(() => {});
+    }, ac.signal);
+
+    activeAborts.delete(userId);
+
+    const stats = { checked: results.length, hits: 0, free: 0, locked: 0, fails: 0 };
+    const hitLines = [], freeLines = [], lockedLines = [];
+
+    for (const r of results) {
+      if (r.status === "hit") {
+        stats.hits++;
+        const caps = Object.entries(r.captures || {}).map(([k, v]) => `${k}: ${v}`).join(" | ");
+        hitLines.push(`${r.user}:${r.password} | ${caps}`);
+      } else if (r.status === "free") {
+        stats.free++;
+        const caps = Object.entries(r.captures || {}).map(([k, v]) => `${k}: ${v}`).join(" | ");
+        freeLines.push(`${r.user}:${r.password} | ${caps}`);
+      } else if (r.status === "locked") {
+        stats.locked++;
+        lockedLines.push(`${r.user}:${r.password} -> ${r.detail || ""}`);
+      } else {
+        stats.fails++;
+      }
+    }
+
+    const sec = ((Date.now() - t0) / 1000).toFixed(1);
+    stats.cpm = sec > 0 ? Math.round(stats.checked / (sec / 60)) : 0;
+    stats.elapsed = `${sec}s`;
+
+    const files = [];
+    if (hitLines.length) files.push(textAttachment(hitLines, "Hits.txt"));
+    if (freeLines.length) files.push(textAttachment(freeLines, "Free.txt"));
+    if (lockedLines.length) files.push(textAttachment(lockedLines, "Locked.txt"));
+
+    statsManager.record("xboxchk", stats);
+
+    const target = dmUser || null;
+    if (target) {
+      try {
+        const dm = await target.createDM();
+        await dm.send({ embeds: [xboxChkResultsEmbed(stats)], files });
+        await msg.edit({ embeds: [successEmbed(`Done — ${stats.checked} checked. Results sent to DMs.`)], components: [] });
+      } catch {
+        await msg.edit({ embeds: [xboxChkResultsEmbed(stats)], files, components: [] });
+      }
+    } else {
+      await msg.edit({ embeds: [xboxChkResultsEmbed(stats)], files, components: [] });
+    }
+  } finally {
+    limiter.release(userId);
+  }
+}
+
 // ── Slash Commands ───────────────────────────────────────────
 
 client.on("interactionCreate", async (interaction) => {
@@ -1234,6 +1316,13 @@ client.on("interactionCreate", async (interaction) => {
         interaction.options.getString("accounts"),
         interaction.options.getAttachment("accounts_file"),
         interaction.options.getInteger("threads") || 15,
+        user);
+    } else if (commandName === "xboxchk") {
+      await interaction.deferReply();
+      await handleXboxChk(respond, user.id,
+        interaction.options.getString("accounts"),
+        interaction.options.getAttachment("accounts_file"),
+        interaction.options.getInteger("threads") || 30,
         user);
     } else if (commandName === "help") {
       await respond({ embeds: [helpOverviewEmbed("/")], components: [helpSelectMenu()] });
@@ -1427,6 +1516,11 @@ client.on("messageCreate", async (message) => {
       const attachment = message.attachments.first();
       if (!accountsRaw && !attachment) return respond({ embeds: [infoEmbed("Usage", "`.steam <accounts>` or attach .txt")] });
       await handleSteam(respond, message.author.id, accountsRaw, attachment, 15, message.author);
+    } else if (cmd === "xboxchk") {
+      const accountsRaw = args.join(" ");
+      const attachment = message.attachments.first();
+      if (!accountsRaw && !attachment) return respond({ embeds: [infoEmbed("Usage", "`.xboxchk <accounts>` or attach .txt — Full capture Xbox checker.")] });
+      await handleXboxChk(respond, message.author.id, accountsRaw, attachment, 30, message.author);
     } else if (cmd === "help") {
       return respond({ embeds: [helpOverviewEmbed(config.PREFIX)], components: [helpSelectMenu()] });
     } else if (cmd === "refund") {
